@@ -2,6 +2,14 @@
 
 日期：2026-10-10。以下区分软件检查与尚未进行的硬件验收。
 
+## 发布验证
+
+公开站点：https://w-joslin-x.github.io/piano-score-library/
+
+首版提交 `a6f6fe2060654e6eca33f767662339f0e0f2015b` 的 [GitHub Actions](https://github.com/W-JOSLIN-X/piano-score-library/actions/runs/37968627156) 已成功完成 Linux / Node 24 的依赖安装、10 项测试、类型检查、生产构建与 Pages 部署。
+
+使用游客浏览器实际打开公开 HTTPS 地址，确认三首曲库、静态资源及样本五线谱预览加载成功，控制台无错误或警告。本次发布记录的后续文档提交不改变已验证的网页产物。
+
 ## 自动检查
 
 `npm test`：10 项通过，包括 CRC 标准向量、样本包语义、五条谱线栅格化保留、截断/版本/越界/CRC 拒绝、通知分片与重同步、能力限制、提交后发布、替换和删除、取消清理、BEGIN 确认丢失清理、演奏状态拒绝、错误 COMMIT 不报成功。
