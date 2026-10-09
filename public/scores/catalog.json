@@ -1,0 +1,47 @@
+[
+  {
+    "id": "10482001-4d65-4fe0-a62c-001000000001",
+    "title": "晨光小练习",
+    "subtitle": "轻盈的单音，熟悉每一次起落",
+    "level": "入门",
+    "tempo": 100,
+    "duration": 13100,
+    "notes": 16,
+    "bytes": 115820,
+    "crc": 2847728160,
+    "file": "scores/study-1.pseq",
+    "cover": "scores/study-1.svg",
+    "capabilities": 7,
+    "revision": 1
+  },
+  {
+    "id": "10482001-4d65-4fe0-a62c-001000000002",
+    "title": "沿着琴键散步",
+    "subtitle": "上行与下行，找到均匀的节奏",
+    "level": "入门",
+    "tempo": 90,
+    "duration": 14172,
+    "notes": 16,
+    "bytes": 115820,
+    "crc": 3325943038,
+    "file": "scores/study-2.pseq",
+    "cover": "scores/study-2.svg",
+    "capabilities": 7,
+    "revision": 1
+  },
+  {
+    "id": "10482001-4d65-4fe0-a62c-001000000003",
+    "title": "回声与重复",
+    "subtitle": "相同音符之间，也有不同的呼吸",
+    "level": "基础",
+    "tempo": 112,
+    "duration": 16364,
+    "notes": 24,
+    "bytes": 115948,
+    "crc": 3632426099,
+    "file": "scores/study-3.pseq",
+    "cover": "scores/study-3.svg",
+    "capabilities": 7,
+    "revision": 1
+  }
+]
