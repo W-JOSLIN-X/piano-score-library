@@ -127,6 +127,18 @@ export function parseScore(input: Uint8Array): Score {
     );
     sections.push({ type, profile, start, end: start + len, count: n, size });
   }
+  let end = 64 + count * 32;
+  for (const s of [...sections].sort((a, b) => a.start - b.start)) {
+    check(
+      bytes.subarray(end, s.start).every((b) => b === 0),
+      "段间填充必须为零",
+    );
+    end = s.end;
+  }
+  check(
+    bytes.length % 4 === 0 && bytes.subarray(end).every((b) => b === 0),
+    "段尾填充错误",
+  );
   const metas = sections.filter((s) => s.type === 1),
     ns = sections.filter((s) => s.type === 2);
   check(
@@ -149,6 +161,12 @@ export function parseScore(input: Uint8Array): Score {
       meta.title.length > 0 &&
       meta.title.length <= 128,
     "标题格式错误",
+  );
+  check(
+    [meta.source, meta.generator_version].every(
+      (x) => typeof x === "string" && x.trim().length > 0,
+    ),
+    "元数据缺少 source 或 generator_version",
   );
   check(
     ns.length <= 1 &&
@@ -175,9 +193,18 @@ export function parseScore(input: Uint8Array): Score {
           !(bytes[o + 11]! & ~1),
         "音符字段错误",
       );
+      const previous = notes.at(-1);
       check(
-        !notes.length || start >= notes[notes.length - 1]!.start,
-        "音符时间未排序",
+        !previous ||
+          start > previous.start ||
+          (start === previous.start &&
+            (pitch > previous.pitch ||
+              (pitch === previous.pitch && group >= previous.group))),
+        "音符未按起点、音高和分组排序",
+      );
+      check(
+        !previous || start !== previous.start || pitch !== previous.pitch,
+        "同起点同音目标必须在制作时合并",
       );
       check(
         !groups.has(group) || groups.get(group) === start,
@@ -230,6 +257,10 @@ export function parseScore(input: Uint8Array): Score {
         "谱面布局错误",
       );
       check(
+        profile !== 1 || (width === 960 && height === 480),
+        "profile 1 必须为 960×480",
+      );
+      check(
         sections.some(
           (b) =>
             b.type === 6 &&
@@ -269,6 +300,9 @@ export function parseScore(input: Uint8Array): Score {
           bytes[o + 7] === 0,
         "CC 记录错误",
       );
+  for (const s of sections.filter((s) => s.type === 4))
+    for (let o = s.start; o < s.end; o += 8)
+      check(u32(o) <= duration && !(bytes[o + 7]! & ~1), "拍点时间或标志错误");
   for (const s of sections.filter((s) => s.type === 7))
     for (let o = s.start; o < s.end; o += 24) {
       const p = pages.find((p) => p.id === u32(o + 4));

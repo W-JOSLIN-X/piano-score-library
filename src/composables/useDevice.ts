@@ -6,6 +6,7 @@ import {
   validateStatus,
   listEntries,
   transferScore,
+  TransferCancelled,
   type DeviceLink,
   type Caps,
   type Status,
@@ -25,9 +26,15 @@ const link = shallowRef<DeviceLink>(),
 let abort: AbortController | undefined;
 const message = (e: unknown) => (e instanceof Error ? e.message : String(e));
 async function refresh() {
-  if (!link.value) return;
-  status.value = validateStatus(await link.value.request<Status>(CMD.STATUS));
-  entries.value = await listEntries(link.value);
+  const current = link.value;
+  if (!current) return;
+  status.value = undefined;
+  entries.value = [];
+  const nextStatus = validateStatus(await current.request<Status>(CMD.STATUS));
+  const nextEntries = await listEntries(current);
+  if (link.value !== current) return;
+  status.value = nextStatus;
+  entries.value = nextEntries;
 }
 async function guarded(fn: () => Promise<void>) {
   if (busy.value) return;
@@ -48,7 +55,6 @@ function bind(l: DeviceLink) {
       caps.value = undefined;
       status.value = undefined;
       entries.value = [];
-      abort?.abort();
       error.value = "连接已断开；设备中的实际曲目请重连后查询";
     }
   };
@@ -107,17 +113,23 @@ export function useDevice() {
               stage.value = s;
             },
           );
-          await refresh();
         } catch (e) {
-          stage.value = abort.signal.aborted ? "已取消" : "未确认保存";
+          stage.value =
+            e instanceof TransferCancelled ? "已取消" : "未确认保存";
           await refresh().catch(() => {});
+          if (e instanceof TransferCancelled) return;
           throw e;
         } finally {
           abort = undefined;
         }
+        // A directory query failure cannot invalidate a confirmed COMMIT.
+        await refresh().catch((e) => {
+          throw Error(`曲目已保存，目录刷新失败：${message(e)}`);
+        });
       }),
     cancel: () => {
-      stage.value = "正在取消，等待当前数据块结束";
+      if (!abort || stage.value !== "正在传输") return;
+      stage.value = "正在取消";
       abort?.abort(new Error("用户已取消下载"));
     },
     remove: (e: Entry) =>
@@ -125,10 +137,12 @@ export function useDevice() {
         if (!link.value) throw Error("设备未连接");
         const s = validateStatus(await link.value.request<Status>(CMD.STATUS));
         if (s.state !== "LIBRARY") throw Error("设备不在曲库管理状态");
-        await link.value.request(
+        const result = await link.value.request<{ deleted: boolean }>(
           CMD.DELETE,
           jsonBytes({ id: e.id, revision: e.revision }),
         );
+        if (result?.deleted !== true)
+          throw Error("未确认删除，请刷新设备曲库核对");
         await refresh();
       }),
     toggleDemoState: () =>

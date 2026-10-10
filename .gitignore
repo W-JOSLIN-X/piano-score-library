@@ -35,3 +35,9 @@ tsconfig.node.tsbuildinfo
 output/
 test-results/
 playwright-report/
+
+# Local development records (versioned separately on the developer machine)
+/AGENTS.md
+/CONTEXT.md
+/docs/
+/.local-docs.git/

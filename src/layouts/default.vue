@@ -46,19 +46,16 @@ const links = [
     >
       <template #header
         ><RouterLink to="/" class="brand"
-          ><span class="brand-symbol">♮</span
-          ><span>琴谱库<small>PIANO SCORE LIBRARY</small></span></RouterLink
+          ><span class="brand-symbol">♮</span><span>琴谱库</span></RouterLink
         ></template
       >
       <template #default
-        ><div class="nav-caption">你的练习空间</div>
-        <UNavigationMenu :items="links" orientation="vertical" class="w-full" />
-        <div class="sidebar-note">
-          <UIcon name="i-lucide-music-2" class="size-7" />
-          <p>把喜欢的旋律，<br />带到琴键之间。</p>
-          <span>选一首曲子，开始今天的练习。</span>
-        </div></template
-      >
+        ><UNavigationMenu
+          :items="links"
+          orientation="vertical"
+          class="w-full"
+        />
+      </template>
       <template #footer
         ><div class="sidebar-status">
           <span :class="['status-dot', { online: d.link }]" />
@@ -69,9 +66,7 @@ const links = [
                   ? "演示设备已连接"
                   : "蓝牙设备已连接"
                 : "尚未连接设备"
-            }}<small>{{
-              d.link ? "前往「我的设备」管理曲目" : "浏览与预览无需连接"
-            }}</small>
+            }}
           </div>
         </div></template
       >
@@ -104,7 +99,7 @@ const links = [
             variant="soft"
             icon="i-lucide-circle-alert"
             :description="d.error"
-            title="操作未完成"
+            title="提示"
             class="mb-5"
           />
           <div v-if="d.stage" class="transfer-strip" aria-live="polite">
@@ -112,9 +107,7 @@ const links = [
               <strong>{{ d.transferTitle }}</strong
               ><span
                 >{{ d.stage
-                }}{{
-                  d.link?.kind === "demo" ? " · 仅演示，未发送到硬件" : ""
-                }}</span
+                }}{{ d.link?.kind === "demo" ? " · 演示" : "" }}</span
               >
             </div>
             <UProgress :model-value="d.progress" class="max-w-48" /><UButton
@@ -128,7 +121,7 @@ const links = [
           </div>
           <RouterView />
           <footer class="site-footer">
-            <span>琴谱库 · 为每一次练习做好准备</span
+            <span>琴谱库</span
             ><a
               href="https://github.com/W-JOSLIN-X/piano-score-library"
               target="_blank"

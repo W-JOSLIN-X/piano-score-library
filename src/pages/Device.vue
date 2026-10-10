@@ -19,9 +19,7 @@ const states = {
 </script>
 <template>
   <div class="page-intro">
-    <div class="eyebrow">YOUR PIANO, CONNECTED</div>
-    <h1>让曲谱，来到琴边。</h1>
-    <p>连接设备，查看已保存的曲目。下载完成后，就可以放下手机专心练习。</p>
+    <h1>我的设备</h1>
   </div>
   <div class="device-grid">
     <UCard
@@ -34,14 +32,11 @@ const states = {
           >
         </div></template
       >
-      <p class="body-copy">
-        使用 Windows 或 Android Chrome，开启系统蓝牙，选择运行配套固件的
-        ESP32。当前 MIDI 转换固件尚不提供此 BLE 服务。
-      </p>
+      <p class="body-copy">Windows / Android Chrome，需配套 BLE 固件。</p>
       <UAlert
         v-if="!supported"
         title="当前环境不支持网页蓝牙"
-        description="请使用 HTTPS 网站，或在 Windows / Android Chrome 中打开。你仍可使用演示设备。"
+        description="请使用 HTTPS 下的 Windows / Android Chrome。"
         color="warning"
         variant="soft"
         class="mt-4"
@@ -67,12 +62,10 @@ const states = {
       ><template #header
         ><div class="flex items-center gap-3">
           <UIcon name="i-lucide-flask-conical" class="size-6 text-amber-600" />
-          <h2>先体验一下</h2>
+          <h2>演示设备</h2>
         </div></template
       >
-      <p class="body-copy">
-        使用演示设备验证下载、取消、目录和删除流程。数据仅在当前网页内存中，刷新后清空，不会连接或写入任何硬件。
-      </p>
+      <p class="body-copy">仅浏览器内存，刷新清空，不写入硬件。</p>
       <UButton
         class="mt-6"
         color="neutral"
@@ -84,20 +77,12 @@ const states = {
       ></UCard
     >
   </div>
-  <UAlert
-    v-if="d.link?.kind === 'demo'"
-    class="mt-6"
-    color="warning"
-    variant="soft"
-    title="当前是演示设备"
-    description="下面的容量和已保存曲目均为模拟状态，不代表 FPGA 上的真实内容。"
-  />
   <section class="mt-8">
     <div class="section-title">
       <div>
         <h2>设备本地曲库</h2>
         <p class="muted mt-2">
-          {{ d.link?.name || "连接后读取设备返回的曲目目录" }}
+          {{ d.link?.name || "连接后查看已保存曲目" }}
         </p>
       </div>
       <UButton
@@ -135,15 +120,12 @@ const states = {
     </div>
     <div v-if="!d.entries.length" class="empty-state">
       <UIcon name="i-lucide-folder-open" class="size-10" />
-      <h3>{{ d.link ? "这里还没有曲目" : "先连接你的设备" }}</h3>
-      <p>
-        {{
-          d.link
-            ? "从曲库打开一首曲目，然后发送到设备。"
-            : "设备目录由 FPGA 返回，网站不会把线上曲库当成已下载内容。"
-        }}
-      </p>
-      <UButton v-if="d.link" to="/" variant="soft">去挑一首曲子</UButton>
+      <h3>
+        {{ !d.link ? "尚未连接" : !d.status ? "目录尚未读取" : "暂无曲目" }}
+      </h3>
+      <UButton v-if="d.link && d.status" to="/" variant="soft"
+        >浏览曲库</UButton
+      >
     </div>
     <div v-else class="device-list">
       <div v-for="e in d.entries" :key="e.id" class="device-row">
@@ -186,7 +168,7 @@ const states = {
       (d.link?.kind === 'demo' ? '演示设备' : '实际设备') +
       '删除「' +
       deleting?.title +
-      '」。之后可以重新下载。'
+      '」。'
     "
     ><template #footer
       ><UButton color="neutral" variant="outline" @click="confirm = false"

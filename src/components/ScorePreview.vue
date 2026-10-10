@@ -10,11 +10,25 @@ const props = defineProps<{ score: Score }>(),
   speed = ref("1"),
   profile = ref("");
 const profiles = computed(() => [
-  ...new Set(props.score.pages.map((p) => String(p.profile))),
+  ...new Set(
+    props.score.pages
+      .filter((p) => props.score.capabilities & (1 << p.notation))
+      .map((p) => String(p.profile)),
+  ),
 ]);
 const available = computed(() => [
-  ...(props.score.capabilities & 2 ? ["五线谱"] : []),
-  ...(props.score.capabilities & 4 ? ["简谱"] : []),
+  ...(props.score.capabilities & 2 &&
+  props.score.pages.some(
+    (p) => p.profile === Number(profile.value) && p.notation === 1,
+  )
+    ? ["五线谱"]
+    : []),
+  ...(props.score.capabilities & 4 &&
+  props.score.pages.some(
+    (p) => p.profile === Number(profile.value) && p.notation === 2,
+  )
+    ? ["简谱"]
+    : []),
   ...(props.score.capabilities & 1 ? ["钢琴块"] : []),
 ]);
 const pages = computed(() =>
@@ -56,6 +70,8 @@ watch(
 watch([tab, profile], () => {
   pageIndex.value = 0;
   playing.value = false;
+  if (!available.value.includes(tab.value))
+    tab.value = available.value[0] || "钢琴块";
 });
 watch([page, canvas], draw, { flush: "post", immediate: true });
 let raf = 0,
@@ -70,9 +86,13 @@ function tick(t: number) {
     if (time.value >= props.score.duration) playing.value = false;
   }
   last = t;
-  raf = requestAnimationFrame(tick);
+  if (playing.value) raf = requestAnimationFrame(tick);
 }
-raf = requestAnimationFrame(tick);
+watch(playing, (active) => {
+  cancelAnimationFrame(raf);
+  last = 0;
+  if (active) raf = requestAnimationFrame(tick);
+});
 onBeforeUnmount(() => cancelAnimationFrame(raf));
 const keys = Array.from({ length: 88 }, (_, i) => {
   const pitch = i + 21;
@@ -116,7 +136,6 @@ const blocks = computed(() =>
 function toggle() {
   if (time.value >= props.score.duration) time.value = 0;
   playing.value = !playing.value;
-  last = 0;
 }
 </script>
 <template>
@@ -133,6 +152,7 @@ function toggle() {
   <template v-if="tab !== '钢琴块'"
     ><div class="sheet-container">
       <canvas
+        v-if="page"
         ref="canvas"
         :aria-label="tab + '第' + (pageIndex + 1) + '页'"
         role="img"
@@ -162,11 +182,10 @@ function toggle() {
   >
   <template v-else
     ><p v-if="outsideKeyboard" class="preview-note">
-      此预览仅显示标准 88 键范围（MIDI
-      21～108）；范围外的音符仍完整保留在曲目包中。
+      预览显示 88 键范围，范围外音符仍保留在文件中。
     </p>
     <p v-if="visibleNotes.length > 512" class="preview-note">
-      当前片段过密，仅绘制前 512 个音符；传输的曲目包不受影响。
+      预览最多显示 512 个音符，文件保持完整。
     </p>
     <div class="roll-container">
       <svg viewBox="0 0 920 412" role="img" aria-label="无声钢琴块预览">
@@ -244,8 +263,6 @@ function toggle() {
       class="timeline"
       aria-label="预览进度"
     />
-    <p class="preview-note">
-      绿色：右手／未分手 · 橙色：左手。此处仅预览时间表，不进行实际演奏判分。
-    </p></template
+    <p class="preview-note">绿色：右手／未分手 · 橙色：左手</p></template
   >
 </template>

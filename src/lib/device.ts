@@ -37,8 +37,14 @@ export interface DeviceLink {
   close(): void;
   onDisconnect?: () => void;
 }
+export class TransferCancelled extends Error {
+  constructor() {
+    super("下载已取消");
+  }
+}
 export function validateCaps(x: Caps): Caps {
   if (
+    !x ||
     x.protocol !== 1 ||
     x.package_major !== 1 ||
     !Number.isInteger(x.max_payload) ||
@@ -59,6 +65,7 @@ export function validateCaps(x: Caps): Caps {
 }
 export function validateStatus(x: Status): Status {
   if (
+    !x ||
     !["LIBRARY", "IMPORTING", "READING", "PERFORMING"].includes(x.state) ||
     !Number.isSafeInteger(x.free_bytes) ||
     x.free_bytes < 0
@@ -75,6 +82,7 @@ export async function listEntries(link: DeviceLink): Promise<Entry[]> {
     const r: { generation: number; next: string | null; items: Entry[] } =
       await link.request(CMD.LIST, jsonBytes({ cursor, generation }));
     if (
+      !r ||
       !Number.isInteger(r.generation) ||
       !Array.isArray(r.items) ||
       r.items.length > 32
@@ -85,6 +93,7 @@ export async function listEntries(link: DeviceLink): Promise<Entry[]> {
     generation = r.generation;
     for (const e of r.items) {
       if (
+        !e ||
         typeof e.id !== "string" ||
         typeof e.title !== "string" ||
         e.title.length > 128 ||
@@ -123,7 +132,8 @@ export async function transferScore(
     throw Error("曲目音符数量超过设备限制");
   if (score.pages.some((p) => !caps.profiles.includes(p.profile)))
     throw Error("设备不支持此曲目的谱面规格");
-  let started = false;
+  let started = false,
+    committing = false;
   try {
     signal.throwIfAborted();
     const beginPayload = jsonBytes({
@@ -160,6 +170,7 @@ export async function transferScore(
     }
     signal.throwIfAborted();
     progress(score.bytes.length, "设备校验与保存中");
+    committing = true;
     const done = await link.request<{
       state: string;
       id: string;
@@ -167,15 +178,28 @@ export async function transferScore(
       crc32: number;
     }>(CMD.COMMIT, new Uint8Array(), 30000);
     if (
+      !done ||
       done.state !== "STORED" ||
       done.id !== score.id ||
       done.revision !== score.revision ||
       done.crc32 !== score.crc
     )
-      throw Error("未收到匹配的最终保存确认；请刷新设备曲库核对");
+      throw Error("设备保存响应与曲目不匹配");
     progress(score.bytes.length, "已保存到设备");
   } catch (e) {
-    if (started) await link.request(CMD.CANCEL).catch(() => {});
+    if (committing)
+      throw Error(
+        `未收到匹配的最终保存确认；请刷新设备曲库核对（${e instanceof Error ? e.message : String(e)}）`,
+      );
+    let cancelled = !started;
+    if (started) {
+      const reply = await link
+        .request<{ state: string }>(CMD.CANCEL)
+        .catch(() => undefined);
+      cancelled = reply?.state === "LIBRARY";
+    }
+    if (signal.aborted && cancelled) throw new TransferCancelled();
+    if (signal.aborted) throw Error("未确认取消；请重连并刷新设备曲库");
     throw e;
   }
 }
@@ -195,9 +219,12 @@ export class BleLink implements DeviceLink {
     reject: (e: Error) => void;
   };
   private busy = false;
+  private interrupt?: (error: Error) => void;
   private maxWrite = 20;
   private disconnected = () => {
-    this.pending?.reject(Error("蓝牙连接已断开；未确认的曲目不视为已保存"));
+    const error = Error("蓝牙连接已断开；请重连后核对曲库");
+    this.interrupt?.(error);
+    this.pending?.reject(error);
     this.pending = undefined;
     this.decoder.reset();
     this.onDisconnect?.();
@@ -243,9 +270,13 @@ export class BleLink implements DeviceLink {
   ): Promise<T> {
     if (this.busy) throw Error("设备正在处理上一条命令");
     if (!this.rx || !this.device?.gatt?.connected) throw Error("设备未连接");
-    this.busy = true;
     const seq = ++this.seq,
       encoded = encodeFrame({ type, payload, seq, session: this.session });
+    this.busy = true;
+    const stopped = new Promise<never>((_, reject) => {
+      this.interrupt = reject;
+    });
+    stopped.catch(() => {});
     try {
       for (let attempt = 0; attempt < 3; attempt++) {
         let timer: ReturnType<typeof setTimeout> | undefined;
@@ -254,10 +285,30 @@ export class BleLink implements DeviceLink {
         });
         answer.catch(() => {});
         try {
-          for (let o = 0; o < encoded.length; o += this.maxWrite)
-            await this.rx.writeValueWithResponse(
-              encoded.slice(o, o + this.maxWrite),
-            );
+          for (let o = 0; o < encoded.length; o += this.maxWrite) {
+            try {
+              // A native GATT write cannot be cancelled. Drop the connection on
+              // failure so no new request can overlap an unfinished write.
+              const deadline = new Promise<never>((_, reject) => {
+                timer = setTimeout(
+                  () => reject(Error("蓝牙写入超时，请重新连接")),
+                  5000,
+                );
+              });
+              await Promise.race([
+                this.rx.writeValueWithResponse(
+                  encoded.slice(o, o + this.maxWrite),
+                ),
+                stopped,
+                deadline,
+              ]);
+            } catch (e) {
+              this.close();
+              throw e;
+            } finally {
+              clearTimeout(timer);
+            }
+          }
           timer = setTimeout(
             () => this.pending?.reject(Error("ACK_TIMEOUT")),
             timeout,
@@ -284,6 +335,7 @@ export class BleLink implements DeviceLink {
       }
       throw Error("设备响应超时");
     } finally {
+      this.interrupt = undefined;
       this.busy = false;
     }
   }
