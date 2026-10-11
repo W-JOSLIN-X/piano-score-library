@@ -1,16 +1,6 @@
-import { crc32 } from "./pseq";
-export const CMD = {
-  CAPS: 1,
-  STATUS: 2,
-  LIST: 3,
-  BEGIN: 16,
-  DATA: 17,
-  COMMIT: 18,
-  CANCEL: 19,
-  DELETE: 20,
-  ACK: 128,
-  ERROR: 255,
-} as const;
+import { crc32 } from "./binary";
+import { CMD, VERSION, MAX_PAYLOAD, isU32 } from "./protocol";
+export { CMD };
 export const SERVICE = "e6340001-8d7a-4e31-9ab0-43c800000001";
 export const RX = "e6340002-8d7a-4e31-9ab0-43c800000001";
 export const TX = "e6340003-8d7a-4e31-9ab0-43c800000001";
@@ -20,18 +10,29 @@ export type Frame = {
   seq: number;
   payload: Uint8Array;
 };
-export const jsonBytes = (value: unknown) =>
-  new TextEncoder().encode(JSON.stringify(value));
+export function jsonBytes(value: unknown) {
+  const bytes = new TextEncoder().encode(JSON.stringify(value));
+  if (bytes.length > MAX_PAYLOAD) throw Error("控制 JSON 超过 1024 字节");
+  return bytes;
+}
 export function readJson<T>(bytes: Uint8Array): T {
   return JSON.parse(
     new TextDecoder("utf-8", { fatal: true }).decode(bytes),
   ) as T;
 }
 export function encodeFrame(f: Frame): Uint8Array {
-  if (f.payload.length > 1024) throw Error("通信帧过长");
+  if (
+    f.payload.length > MAX_PAYLOAD ||
+    !isU32(f.seq) ||
+    !isU32(f.session) ||
+    !Number.isInteger(f.type) ||
+    f.type < 0 ||
+    f.type > 255
+  )
+    throw Error("通信帧过长");
   const b = new Uint8Array(20 + f.payload.length),
     v = new DataView(b.buffer);
-  b.set([0xa5, 0x5a, 1, f.type]);
+  b.set([0xa5, 0x5a, VERSION, f.type]);
   v.setUint32(4, f.session, true);
   v.setUint32(8, f.seq, true);
   v.setUint16(12, f.payload.length, true);
@@ -60,7 +61,7 @@ export class FrameDecoder {
       if (b.length < 16) break;
       const v = new DataView(b.buffer, b.byteOffset, b.byteLength),
         n = v.getUint16(12, true);
-      if (b[2] !== 1 || n > 1024 || v.getUint16(14, true) !== 0) {
+      if (b[2] !== VERSION || n > 1024 || v.getUint16(14, true) !== 0) {
         this.data = b.slice(1);
         continue;
       }

@@ -2,39 +2,92 @@ import { ref, shallowRef } from "vue";
 import {
   BleLink,
   DemoLink,
+  DemoStorage,
   validateCaps,
   validateStatus,
   listEntries,
   transferScore,
-  TransferCancelled,
+  deleteEntry,
+  matchesScore,
+  TransferPaused,
+  TransferStopped,
+  UnknownCommit,
+  UnknownDelete,
   type DeviceLink,
   type Caps,
   type Status,
   type Entry,
 } from "../lib/device";
+import { parseScore, type Score } from "../lib/pseq";
 import { CMD, jsonBytes } from "../lib/wire";
-import type { Score } from "../lib/pseq";
 const link = shallowRef<DeviceLink>(),
   caps = ref<Caps>(),
   status = ref<Status>(),
   entries = ref<Entry[]>([]),
-  busy = ref(false),
+  directory = ref<"unknown" | "loading" | "known">("unknown");
+const busy = ref(false),
   error = ref(""),
   progress = ref(0),
   stage = ref(""),
-  transferTitle = ref("");
-let abort: AbortController | undefined;
+  transferTitle = ref(""),
+  savedBytes = ref(0),
+  totalBytes = ref(0);
+const transferKind = ref<"ble" | "demo">();
+const demoStorage = new DemoStorage(),
+  sources = new Map<string, Score>();
+const pendingCommits = new Map<string, Score>(),
+  pendingDeletes = new Map<string, Entry>();
+let abort: AbortController | undefined,
+  dirty = false,
+  scheduled = false;
 const message = (e: unknown) => (e instanceof Error ? e.message : String(e));
 async function refresh() {
   const current = link.value;
   if (!current) return;
-  status.value = undefined;
-  entries.value = [];
-  const nextStatus = validateStatus(await current.request<Status>(CMD.STATUS));
-  const nextEntries = await listEntries(current);
-  if (link.value !== current) return;
-  status.value = nextStatus;
-  entries.value = nextEntries;
+  directory.value = "loading";
+  try {
+    const nextStatus = validateStatus(await current.request(CMD.STATUS));
+    const nextEntries = await listEntries(current);
+    if (link.value !== current) return;
+    status.value = nextStatus;
+    entries.value = nextEntries;
+    directory.value = "known";
+    for (const [key, score] of pendingCommits)
+      if (key === current.identity + ":" + score.id) {
+        if (
+          nextEntries.some((e) => e.entry_state === 2 && matchesScore(e, score))
+        ) {
+          stage.value = "已核对保存成功";
+          progress.value = 100;
+          pendingCommits.delete(key);
+        }
+      }
+    for (const [key, entry] of pendingDeletes)
+      if (key === current.identity + ":" + entry.id) {
+        stage.value = nextEntries.some((e) => e.id === entry.id)
+          ? "该 UUID 仍存在，未确认删除；不会自动重试"
+          : "已核对曲目不存在";
+        pendingDeletes.delete(key);
+      }
+  } catch (e) {
+    if (link.value === current) {
+      directory.value = "unknown";
+      entries.value = [];
+    }
+    throw e;
+  }
+}
+function scheduleRefresh() {
+  dirty = true;
+  if (scheduled || busy.value || !link.value) return;
+  scheduled = true;
+  queueMicrotask(() => {
+    scheduled = false;
+    if (!busy.value && dirty && link.value) {
+      dirty = false;
+      void guarded(refresh);
+    }
+  });
 }
 async function guarded(fn: () => Promise<void>) {
   if (busy.value) return;
@@ -46,19 +99,104 @@ async function guarded(fn: () => Promise<void>) {
     error.value = message(e);
   } finally {
     busy.value = false;
+    if (dirty) scheduleRefresh();
   }
 }
-function bind(l: DeviceLink) {
-  l.onDisconnect = () => {
-    if (link.value === l) {
-      link.value = undefined;
-      caps.value = undefined;
-      status.value = undefined;
-      entries.value = [];
-      error.value = "连接已断开；设备中的实际曲目请重连后查询";
-    }
+function bind(current: DeviceLink) {
+  current.onDisconnect = () => {
+    if (link.value !== current) return;
+    link.value = undefined;
+    caps.value = undefined;
+    status.value = undefined;
+    entries.value = [];
+    directory.value = "unknown";
+    dirty = false;
+    error.value = "连接已断开；已确认进度保留，重连后查询设备";
   };
-  link.value = l;
+  current.onChanged = (event) => {
+    if (link.value !== current) return;
+    if (status.value?.generation !== event.generation)
+      directory.value = "loading";
+    if (status.value) status.value = { ...status.value, ...event };
+    if (event.mode !== 0 && abort && !abort.signal.aborted) abort.abort("mode");
+    scheduleRefresh();
+  };
+  link.value = current;
+}
+async function upload(score: Score, replace = false) {
+  const current = link.value,
+    c = caps.value;
+  if (!current || !c) throw Error("请先连接设备");
+  sources.set(score.id, score);
+  const existing = (await listEntries(current)).find((e) => e.id === score.id);
+  if (existing?.entry_state === 2) {
+    if (!replace) throw Error("设备已有完整曲目，请使用明确的“重新下载”操作");
+    try {
+      await deleteEntry(current, existing);
+      entries.value = entries.value.filter((e) => e.id !== existing.id);
+    } catch (e) {
+      if (e instanceof UnknownDelete) {
+        pendingDeletes.set(current.identity + ":" + existing.id, existing);
+        stage.value = "删除结果未确认，重连后先核对目录";
+      }
+      throw e;
+    }
+  }
+  abort = new AbortController();
+  transferKind.value = current.kind;
+  progress.value = 0;
+  savedBytes.value = 0;
+  totalBytes.value = score.bytes.length;
+  stage.value = "准备传输";
+  transferTitle.value = String(score.meta.title);
+  try {
+    await transferScore(current, score, c, abort.signal, (bytes, text) => {
+      savedBytes.value = bytes;
+      progress.value = (bytes / score.bytes.length) * 100;
+      stage.value = text;
+    });
+  } catch (e) {
+    if (e instanceof UnknownCommit)
+      pendingCommits.set(current.identity + ":" + score.id, score);
+    stage.value =
+      e instanceof TransferPaused
+        ? "已暂停，进度保留"
+        : e instanceof TransferStopped
+          ? "已停止，回到管理状态后手动续传"
+          : "保存结果未确认";
+    if (e instanceof TransferPaused || e instanceof TransferStopped) return;
+    throw e;
+  } finally {
+    abort = undefined;
+    if (link.value === current) {
+      dirty = false;
+      await refresh().catch((e) => {
+        error.value =
+          stage.value === "已保存"
+            ? `保存成功；目录待刷新：${message(e)}`
+            : message(e);
+      });
+    }
+  }
+}
+async function resume(entry: Entry, replace = false) {
+  let score = sources.get(entry.id);
+  if (!score) {
+    const response = await fetch(
+      import.meta.env.BASE_URL + "scores/catalog.json",
+    );
+    if (!response.ok)
+      throw Error("预置目录无法加载，请稍后重试或重新导入原文件");
+    const catalog = (await response.json()) as { id: string; file: string }[],
+      item = catalog.find((i) => i.id === entry.id);
+    if (!item) throw Error("请在曲库页面重新导入原 .pseq 文件，再点击下载续传");
+    const file = await fetch(import.meta.env.BASE_URL + item.file);
+    if (!file.ok) throw Error("原曲目文件无法加载");
+    score = parseScore(new Uint8Array(await file.arrayBuffer()));
+  }
+  if (!replace && !matchesScore(entry, score))
+    throw Error("原文件 UUID、长度或 CRC 不一致，请手动删除未完成曲目后再下载");
+  await upload(score, replace);
 }
 export function useDevice() {
   return {
@@ -66,92 +204,98 @@ export function useDevice() {
     caps,
     status,
     entries,
+    directory,
     busy,
     error,
     progress,
     stage,
     transferTitle,
+    transferKind,
+    savedBytes,
+    totalBytes,
     connect: (demo = false) =>
       guarded(async () => {
         link.value?.close();
+        const current = demo ? new DemoLink(demoStorage) : new BleLink();
         stage.value = "";
         progress.value = 0;
-        error.value = "";
-        const l = demo ? new DemoLink() : new BleLink();
-        const c =
-          l instanceof BleLink
-            ? await l.connect()
-            : validateCaps(await l.request<Caps>(CMD.CAPS));
-        bind(l);
-        caps.value = c;
-        await refresh();
+        bind(current);
+        try {
+          caps.value =
+            current instanceof BleLink
+              ? await current.connect()
+              : validateCaps(await current.request(CMD.CAPS));
+          await refresh();
+        } catch (e) {
+          if (!caps.value) current.close();
+          throw e;
+        }
       }),
     refresh: () => guarded(refresh),
     disconnect: () => {
-      if (!busy.value) {
-        link.value?.close();
-        error.value = "";
-        stage.value = "";
+      link.value?.close();
+    },
+    upload: (score: Score, replace = false) =>
+      guarded(() => upload(score, replace)),
+    resume: (entry: Entry) => guarded(() => resume(entry)),
+    redownload: (entry: Entry) => guarded(() => resume(entry, true)),
+    pause: () => {
+      if (abort && stage.value === "正在传输") {
+        stage.value = "正在暂停，等待当前块确认";
+        abort.abort("user");
       }
     },
-    upload: (score: Score) =>
+    remove: (entry: Entry) =>
       guarded(async () => {
-        if (!link.value || !caps.value)
-          throw Error("请先在设备页面连接真实设备或演示设备");
-        abort = new AbortController();
-        progress.value = 0;
-        stage.value = "准备传输";
-        transferTitle.value = String(score.meta.title);
+        const current = link.value;
+        if (!current) throw Error("设备未连接");
+        transferTitle.value = entry.title;
+        transferKind.value = current.kind;
+        totalBytes.value = 0;
+        savedBytes.value = 0;
         try {
-          await transferScore(
-            link.value,
-            score,
-            caps.value,
-            abort.signal,
-            (o, s) => {
-              progress.value = (o / score.bytes.length) * 100;
-              stage.value = s;
-            },
-          );
+          await deleteEntry(current, entry);
+          stage.value = "已删除";
         } catch (e) {
-          stage.value =
-            e instanceof TransferCancelled ? "已取消" : "未确认保存";
-          await refresh().catch(() => {});
-          if (e instanceof TransferCancelled) return;
+          if (e instanceof UnknownDelete) {
+            pendingDeletes.set(current.identity + ":" + entry.id, entry);
+            stage.value = "删除结果未确认，重连后先核对目录";
+          }
           throw e;
         } finally {
-          abort = undefined;
+          if (link.value === current) {
+            dirty = false;
+            await refresh().catch((e) => {
+              error.value = "目录待刷新：" + message(e);
+            });
+          }
         }
-        // A directory query failure cannot invalidate a confirmed COMMIT.
-        await refresh().catch((e) => {
-          throw Error(`曲目已保存，目录刷新失败：${message(e)}`);
-        });
       }),
-    cancel: () => {
-      if (!abort || stage.value !== "正在传输") return;
-      stage.value = "正在取消";
-      abort?.abort(new Error("用户已取消下载"));
-    },
-    remove: (e: Entry) =>
+    pauseActive: () =>
       guarded(async () => {
-        if (!link.value) throw Error("设备未连接");
-        const s = validateStatus(await link.value.request<Status>(CMD.STATUS));
-        if (s.state !== "LIBRARY") throw Error("设备不在曲库管理状态");
-        const result = await link.value.request<{ deleted: boolean }>(
-          CMD.DELETE,
-          jsonBytes({ id: e.id, revision: e.revision }),
+        const current = link.value,
+          id = status.value?.active_id;
+        if (!current || !id) return;
+        const r = await current.request<{ request_type: number; id: string }>(
+          CMD.PAUSE,
+          jsonBytes({ id }),
         );
-        if (result?.deleted !== true)
-          throw Error("未确认删除，请刷新设备曲库核对");
+        if (r.request_type !== CMD.PAUSE || r.id !== id)
+          throw Error("暂停确认无效");
         await refresh();
       }),
-    toggleDemoState: () =>
-      guarded(async () => {
-        if (link.value instanceof DemoLink) {
-          link.value.state =
-            link.value.state === "LIBRARY" ? "PERFORMING" : "LIBRARY";
-          await refresh();
-        }
-      }),
+    toggleDemoState: () => {
+      if (link.value instanceof DemoLink)
+        demoStorage.setMode(demoStorage.mode === 0 ? 3 : 0);
+    },
+    restartDemo: () => {
+      if (link.value instanceof DemoLink) {
+        link.value.close();
+        demoStorage.restart();
+      }
+    },
+    demoLocalDelete: (entry: Entry) => {
+      if (link.value instanceof DemoLink) demoStorage.localDelete(entry.id);
+    },
   };
 }

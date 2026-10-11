@@ -2,6 +2,7 @@
 import { computed, reactive, ref } from "vue";
 import { useRoute } from "vue-router";
 import { useDevice } from "../composables/useDevice";
+import { formatBytes } from "../lib/binary";
 const open = ref(false),
   route = useRoute(),
   d = reactive(useDevice());
@@ -106,17 +107,26 @@ const links = [
             <div>
               <strong>{{ d.transferTitle }}</strong
               ><span
-                >{{ d.stage
-                }}{{ d.link?.kind === "demo" ? " · 演示" : "" }}</span
+                >{{ d.stage }}{{ d.transferKind === "demo" ? " · 演示" : "" }}
+                <template v-if="d.totalBytes">
+                  · 已确认 {{ formatBytes(d.savedBytes) }} /
+                  {{ formatBytes(d.totalBytes) }} ·
+                  {{ Math.ceil(d.savedBytes / 512) }} /
+                  {{ Math.ceil(d.totalBytes / 512) }} 块</template
+                ></span
               >
             </div>
-            <UProgress :model-value="d.progress" class="max-w-48" /><UButton
+            <UProgress
+              v-if="d.totalBytes"
+              :model-value="d.progress"
+              class="max-w-48"
+            /><UButton
               v-if="d.busy && d.stage === '正在传输'"
               size="xs"
               color="neutral"
               variant="outline"
-              @click="d.cancel"
-              >取消传输</UButton
+              @click="d.pause"
+              >暂停传输</UButton
             >
           </div>
           <RouterView />

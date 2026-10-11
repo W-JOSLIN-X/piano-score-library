@@ -9,15 +9,8 @@ import {
   type Frame,
 } from "../src/lib/wire";
 
-const caps: Caps = {
-  protocol: 1,
-  package_major: 1,
-  max_payload: 1024,
-  max_write: 20,
-  max_file_bytes: 4194304,
-  max_notes: 20000,
-  profiles: [1],
-};
+import { DemoStorage, TransportError } from "../src/lib/device";
+const caps: Caps = { ...new DemoStorage().caps, max_write: 64 };
 async function bluetooth() {
   const device = new EventTarget();
   const tx = Object.assign(new EventTarget(), {
@@ -27,7 +20,11 @@ async function bluetooth() {
   const frames: Frame[] = [],
     decoder = new FrameDecoder();
   function reply(f: Frame, value: unknown = {}, type: number = CMD.ACK) {
-    const bytes = encodeFrame({ ...f, type, payload: jsonBytes(value) });
+    const bytes = encodeFrame({
+      ...f,
+      type,
+      payload: jsonBytes({ request_type: f.type, ...(value as object) }),
+    });
     for (let offset = 0; offset < bytes.length; offset += 7) {
       tx.value = new DataView(bytes.slice(offset, offset + 7).buffer);
       tx.dispatchEvent(new Event("characteristicvaluechanged"));
@@ -57,7 +54,7 @@ async function bluetooth() {
       device.dispatchEvent(new Event("gattserverdisconnected"));
     },
   };
-  Object.assign(device, { name: "Test BLE", gatt });
+  Object.assign(device, { id: "mock-ble-1", name: "Test BLE", gatt });
   vi.stubGlobal("window", { isSecureContext: true });
   vi.stubGlobal("navigator", {
     bluetooth: { requestDevice: async () => device },
@@ -72,6 +69,70 @@ afterEach(() => {
 });
 
 describe("real BLE client with mocked GATT", () => {
+  it("uses initial 20-byte writes and the reported max_write afterwards", async () => {
+    const { link, rx } = await bluetooth();
+    expect(rx.writeValueWithResponse.mock.calls[0]![0].length).toBe(20);
+    await link.request(CMD.DATA, new Uint8Array(532));
+    const lengths = rx.writeValueWithResponse.mock.calls
+      .slice(1)
+      .map((c) => c[0].length);
+    expect(Math.max(...lengths)).toBe(64);
+    expect(lengths.reduce((a, b) => a + b, 0)).toBe(552);
+    link.close();
+  });
+  it("serializes queued requests and dispatches CHANGED without consuming the ACK", async () => {
+    vi.useFakeTimers();
+    const { link, state, frames, reply } = await bluetooth();
+    const changed = vi.fn();
+    link.onChanged = changed;
+    state.handle = (f) => {
+      if (f.type === CMD.LIST) reply(f, { items: [] });
+    };
+    const first = link.request(CMD.STATUS),
+      second = link.request(CMD.LIST);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(frames.map((f) => f.type)).toEqual([CMD.CAPS, CMD.STATUS]);
+    const f = frames[1]!;
+    reply(
+      { ...f, session: 0, seq: 0 },
+      { generation: 2, mode: 3, phase: 0 },
+      CMD.CHANGED,
+    );
+    expect(changed).toHaveBeenCalledTimes(1);
+    expect(link.mode).toBe(3);
+    reply(f, { mode: 3 });
+    await expect(first).resolves.toMatchObject({ mode: 3 });
+    await expect(second).resolves.toMatchObject({ items: [] });
+    expect(frames[2]!.seq).toBe(f.seq + 1);
+    link.close();
+  });
+  it("rejects wrong request_type and legacy string ERROR codes", async () => {
+    const { link, state, reply } = await bluetooth();
+    state.handle = (f) => reply(f, { request_type: CMD.DELETE });
+    await expect(link.request(CMD.STATUS)).rejects.toThrow("request_type");
+    state.handle = (f) =>
+      reply(f, { code: "BUSY", next_block: null }, CMD.ERROR);
+    await expect(link.request(CMD.STATUS)).rejects.toThrow("整数");
+    state.handle = (f) => reply(f, { code: 1, next_block: null }, CMD.ERROR);
+    await expect(link.request(CMD.STATUS)).rejects.toMatchObject({ code: 1 });
+    link.close();
+  });
+  it("waits 30 seconds per COMMIT attempt and sends at most three identical frames", async () => {
+    vi.useFakeTimers();
+    const { link, state, frames } = await bluetooth();
+    state.handle = () => {};
+    const result = link
+      .request(CMD.COMMIT, jsonBytes({ id: "test" }))
+      .catch((e) => e);
+    await vi.advanceTimersByTimeAsync(29999);
+    expect(frames).toHaveLength(2);
+    await vi.advanceTimersByTimeAsync(60002);
+    expect(await result).toBeInstanceOf(TransportError);
+    expect(frames).toHaveLength(4);
+    expect(frames[1]).toEqual(frames[2]);
+    expect(frames[2]).toEqual(frames[3]);
+    link.close();
+  });
   it("bounds a hanging GATT write and disconnects instead of leaving busy locked", async () => {
     vi.useFakeTimers();
     const { link, rx, gatt } = await bluetooth();
@@ -100,7 +161,9 @@ describe("real BLE client with mocked GATT", () => {
     await expect(link.request(CMD.BEGIN, new Uint8Array(1025))).rejects.toThrow(
       "过长",
     );
-    await expect(link.request(CMD.STATUS)).resolves.toEqual({});
+    await expect(link.request(CMD.STATUS)).resolves.toEqual({
+      request_type: CMD.STATUS,
+    });
     link.close();
   });
   it("retries identical bytes and ignores stale responses for other sequences", async () => {
@@ -110,13 +173,16 @@ describe("real BLE client with mocked GATT", () => {
     state.handle = (f) => {
       if (++attempt === 2) {
         reply({ ...f, seq: f.seq - 1 }, { stale: true });
-        reply(f, { state: "LIBRARY" });
+        reply(f, { mode: 0 });
         reply(f, { duplicate: true });
       }
     };
     const result = link.request(CMD.STATUS, new Uint8Array(), 50);
     await vi.advanceTimersByTimeAsync(51);
-    await expect(result).resolves.toEqual({ state: "LIBRARY" });
+    await expect(result).resolves.toEqual({
+      request_type: CMD.STATUS,
+      mode: 0,
+    });
     expect(frames[1]).toEqual(frames[2]);
     link.close();
   });

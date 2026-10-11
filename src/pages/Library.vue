@@ -32,6 +32,7 @@ const items = ref<Item[]>([]),
   error = ref(""),
   opening = ref(""),
   modal = ref(false),
+  replaceConfirm = ref(false),
   selected = shallowRef<Score>(),
   input = ref<HTMLInputElement>(),
   d = reactive(useDevice());
@@ -157,7 +158,8 @@ function saveFile() {
     />
   </div>
   <div class="collection-meta">
-    <span>{{ filtered.length }} 首曲目</span><span>自制练习</span>
+    <span>{{ filtered.length }} 首曲目</span
+    ><span>公开版权完整作品 · PSC2</span>
   </div>
   <UAlert v-if="error" color="error" :title="error" class="mb-5" />
   <div v-if="loading" class="empty-state">正在打开曲库…</div>
@@ -251,13 +253,28 @@ function saveFile() {
             v-if="d.link"
             icon="i-lucide-send"
             :loading="d.busy"
-            :disabled="d.busy || d.status?.state !== 'LIBRARY'"
+            :disabled="d.busy || d.status?.mode !== 0"
             @click="
-              selected && d.upload(selected);
-              modal = false;
+              if (
+                selected &&
+                d.entries.some(
+                  (e) => e.id === selected!.id && e.entry_state === 2,
+                )
+              )
+                replaceConfirm = true;
+              else {
+                selected && d.upload(selected);
+                modal = false;
+              }
             "
             >{{
-              d.link.kind === "demo" ? "发送到演示设备" : "发送到设备"
+              d.entries.some(
+                (e) => e.id === selected?.id && e.entry_state === 2,
+              )
+                ? "重新下载"
+                : d.link.kind === "demo"
+                  ? "发送到演示设备"
+                  : "发送到设备"
             }}</UButton
           ><UButton
             v-else
@@ -270,4 +287,26 @@ function saveFile() {
       </div></template
     ></UModal
   >
+  <UModal
+    v-model:open="replaceConfirm"
+    title="重新下载此曲目？"
+    description="先删除设备上的同 UUID 完整曲目，再下载当前曲目包。删除后旧内容不保留。"
+  >
+    <template #footer
+      ><UButton
+        variant="outline"
+        color="neutral"
+        @click="replaceConfirm = false"
+        >保留现有曲目</UButton
+      ><UButton
+        color="warning"
+        @click="
+          selected && d.upload(selected, true);
+          replaceConfirm = false;
+          modal = false;
+        "
+        >确认重新下载</UButton
+      ></template
+    >
+  </UModal>
 </template>

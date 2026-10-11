@@ -10,12 +10,8 @@ const supported =
   typeof navigator !== "undefined" &&
   !!navigator.bluetooth &&
   window.isSecureContext;
-const states = {
-  LIBRARY: "曲库管理",
-  IMPORTING: "正在导入",
-  READING: "谱面阅读",
-  PERFORMING: "正在演奏",
-};
+const states = ["曲库管理", "自由演奏", "曲谱阅读", "跟谱练习"];
+const action = ref<"delete" | "redownload">("delete");
 </script>
 <template>
   <div class="page-intro">
@@ -96,34 +92,58 @@ const states = {
     </div>
     <div v-if="d.link && d.status" class="device-summary">
       <div>
-        <span>当前状态</span><strong>{{ states[d.status.state] }}</strong>
+        <span>当前状态</span><strong>{{ states[d.status.mode] }}</strong>
       </div>
       <div>
         <span>可用空间</span
         ><strong>{{ formatBytes(d.status.free_bytes) }}</strong>
       </div>
       <div>
-        <span>已保存曲目</span><strong>{{ d.entries.length }} 首</strong>
+        <span>已保存曲目</span
+        ><strong>{{
+          d.directory === "known"
+            ? d.entries.filter((e) => e.entry_state === 2).length + " 首"
+            : "待查询"
+        }}</strong>
       </div>
       <UButton
         v-if="d.link.kind === 'demo'"
         color="neutral"
         variant="outline"
-        :disabled="d.busy"
         @click="d.toggleDemoState"
         >{{
-          d.status.state === "PERFORMING"
-            ? "演示：返回管理状态"
-            : "演示：切换演奏状态"
+          d.status.mode !== 0 ? "演示：返回管理状态" : "演示：切换演奏状态"
         }}</UButton
       >
     </div>
-    <div v-if="!d.entries.length" class="empty-state">
+    <div v-if="d.link?.kind === 'demo'" class="flex flex-wrap gap-3 my-4">
+      <UButton variant="outline" color="neutral" @click="d.restartDemo"
+        >演示：设备重启并断连（保留内存曲库）</UButton
+      >
+    </div>
+    <UButton
+      v-if="d.status?.active_id && !d.busy"
+      class="my-4"
+      @click="d.pauseActive"
+      >暂停设备当前下载</UButton
+    >
+    <div
+      v-if="d.directory !== 'known' || !d.entries.length"
+      class="empty-state"
+    >
       <UIcon name="i-lucide-folder-open" class="size-10" />
       <h3>
-        {{ !d.link ? "尚未连接" : !d.status ? "目录尚未读取" : "暂无曲目" }}
+        {{
+          !d.link
+            ? "尚未连接"
+            : d.directory === "loading"
+              ? "正在读取目录"
+              : d.directory === "unknown"
+                ? "目录未知，请刷新重试"
+                : "已确认曲库为空"
+        }}
       </h3>
-      <UButton v-if="d.link && d.status" to="/" variant="soft"
+      <UButton v-if="d.directory === 'known'" to="/" variant="soft"
         >浏览曲库</UButton
       >
     </div>
@@ -132,8 +152,12 @@ const states = {
         <div class="file-icon"><UIcon name="i-lucide-file-music" /></div>
         <div>
           <strong>{{ e.title }}</strong>
+          <p class="uuid-label">{{ e.id }}</p>
           <p>
-            {{ formatBytes(e.bytes) }} · v{{ e.revision }} ·
+            {{ e.entry_state === 2 ? "完整 · 可用" : "未完成" }} ·
+            {{ formatBytes(Math.min(e.next_block * 512, e.total_bytes)) }} /
+            {{ formatBytes(e.total_bytes) }} · {{ e.next_block }} /
+            {{ e.total_blocks }} 块 ·
             {{
               [
                 e.capabilities & 2 ? "五线谱" : "",
@@ -145,30 +169,56 @@ const states = {
             }}
           </p>
         </div>
-        <UButton
-          color="error"
-          variant="ghost"
-          icon="i-lucide-trash-2"
-          :disabled="d.busy || d.status?.state !== 'LIBRARY'"
-          :aria-label="'删除' + e.title"
-          @click="
-            deleting = e;
-            confirm = true;
-          "
-          >删除</UButton
-        >
+        <div class="flex flex-wrap gap-2">
+          <UButton
+            v-if="e.entry_state === 1"
+            :disabled="d.busy || d.status?.mode !== 0"
+            @click="d.resume(e)"
+            >续传</UButton
+          >
+          <UButton
+            v-else
+            variant="soft"
+            :disabled="d.busy || d.status?.mode !== 0"
+            @click="
+              deleting = e;
+              action = 'redownload';
+              confirm = true;
+            "
+            >重新下载</UButton
+          >
+          <UButton
+            color="error"
+            variant="ghost"
+            icon="i-lucide-trash-2"
+            :disabled="d.busy || d.status?.mode !== 0"
+            :aria-label="'删除' + e.title"
+            @click="
+              deleting = e;
+              action = 'delete';
+              confirm = true;
+            "
+            >删除</UButton
+          >
+          <UButton
+            v-if="d.link?.kind === 'demo'"
+            variant="ghost"
+            color="neutral"
+            :disabled="d.status?.mode !== 0"
+            @click="d.demoLocalDelete(e)"
+            >演示本地删除</UButton
+          >
+        </div>
       </div>
     </div>
   </section>
   <UModal
     v-model:open="confirm"
-    title="删除设备曲目？"
+    :title="action === 'delete' ? '删除设备曲目？' : '重新下载曲目？'"
     :description="
-      '将从' +
-      (d.link?.kind === 'demo' ? '演示设备' : '实际设备') +
-      '删除「' +
-      deleting?.title +
-      '」。'
+      action === 'delete'
+        ? '删除所选 UUID 的完整内容或全部未完成进度。'
+        : '先删除设备上的完整曲目，再使用原文件重新下载；旧内容不保留。'
     "
     ><template #footer
       ><UButton color="neutral" variant="outline" @click="confirm = false"
@@ -177,11 +227,30 @@ const states = {
         color="error"
         :disabled="d.busy"
         @click="
-          deleting && d.remove(deleting);
+          deleting &&
+            (action === 'delete' ? d.remove(deleting) : d.redownload(deleting));
           confirm = false;
         "
-        >确认删除</UButton
+        >{{ action === "delete" ? "确认删除" : "确认重新下载" }}</UButton
       ></template
     ></UModal
   >
 </template>
+
+<style scoped>
+.uuid-label {
+  overflow-wrap: anywhere;
+  font-size: 11px;
+}
+.device-row > div {
+  min-width: 0;
+}
+@media (max-width: 640px) {
+  .device-row {
+    flex-wrap: wrap;
+  }
+  .device-row > div:nth-child(2) {
+    flex: 1;
+  }
+}
+</style>
