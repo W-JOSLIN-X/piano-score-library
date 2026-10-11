@@ -1,6 +1,6 @@
 {
   "source": "Shared FPGA development plan section 5, defaults frozen 2026-10-11; offline only",
-  "time_unit": "calibrated milliseconds except rollback tick fields",
+  "time_unit": "calibrated milliseconds except rollback tick fields (PPQ 960, BPM 120)",
   "onset": [[-101,0],[-100,70],[-51,70],[-50,100],[0,100],[50,100],[51,70],[100,70],[101,0]],
   "hold": [
     {"input":[1000,2000,1000,1950],"expected":95},
@@ -46,10 +46,40 @@
   },
   "rollback": {
     "safe":[0,4800,5760,7680,8640,9600,9920,10240],"pause":8500,
-    "results":[{"id":0,"start":0},{"id":1,"start":4800},{"id":2,"start":7680}],
-    "history":[{"tick":0,"correct":true},{"tick":4800,"correct":true},{"tick":6000,"correct":false},{"tick":6500,"correct":true},{"tick":7680,"correct":true},{"tick":8200,"correct":false}],
-    "expected":{"start":7680,"keep":[0,1],"combo":1,"maxCombo":2,"history":[{"tick":0,"correct":true},{"tick":4800,"correct":true},{"tick":6000,"correct":false},{"tick":6500,"correct":true}]},
+    "results":[{"id":0,"start":0},{"id":1,"start":4800},{"id":2,"start":7680},{"id":3,"start":6500}],
+    "history":[{"tick":0,"correct":true,"targetId":0},{"tick":4800,"correct":true,"targetId":1},{"tick":6000,"correct":false,"targetId":null},{"tick":6500,"correct":true,"targetId":3},{"tick":7680,"correct":true,"targetId":2},{"tick":8200,"correct":false,"targetId":null}],
+    "expected":{"start":7680,"keep":[0,1,3],"combo":1,"maxCombo":2,"history":[{"tick":0,"correct":true,"targetId":0},{"tick":4800,"correct":true,"targetId":1},{"tick":6000,"correct":false,"targetId":null},{"tick":6500,"correct":true,"targetId":3}]},
     "additional_pause_start":[[4000,0],[7700,7680],[8639,7680],[8640,8640]],
     "resume_gate":"Release actual keys/pedal, retain live SPI state, then countdown; not verified by website"
-  }
+  },
+  "rollback_boundaries": [
+    {
+      "name":"an early onset for the replayed target",
+      "safe":[0,4800],"pause":5000,
+      "results":[{"id":0,"start":4800}],
+      "history":[{"tick":4790,"correct":true,"targetId":0}],
+      "expected":{"start":4800,"keep":[],"combo":0,"maxCombo":0,"history":[]}
+    },
+    {
+      "name":"a late onset for a retained target",
+      "safe":[0,4800],"pause":5000,
+      "results":[{"id":0,"start":0},{"id":1,"start":4700}],
+      "history":[{"tick":0,"correct":true,"targetId":0},{"tick":4810,"correct":true,"targetId":1}],
+      "expected":{"start":4800,"keep":[0,1],"combo":2,"maxCombo":2,"history":[{"tick":0,"correct":true,"targetId":0},{"tick":4810,"correct":true,"targetId":1}]}
+    },
+    {
+      "name":"a late Miss for a retained target",
+      "safe":[0,4800],"pause":5000,
+      "results":[{"id":0,"start":0},{"id":1,"start":4608}],
+      "history":[{"tick":0,"correct":true,"targetId":0},{"tick":4801,"correct":false,"targetId":1}],
+      "expected":{"start":4800,"keep":[0,1],"combo":0,"maxCombo":1,"history":[{"tick":0,"correct":true,"targetId":0},{"tick":4801,"correct":false,"targetId":1}]}
+    },
+    {
+      "name":"extra notes around the safe boundary",
+      "safe":[0,4800],"pause":5000,
+      "results":[{"id":0,"start":0},{"id":1,"start":1000},{"id":2,"start":4800}],
+      "history":[{"tick":0,"correct":true,"targetId":0},{"tick":1000,"correct":true,"targetId":1},{"tick":4799,"correct":false,"targetId":null},{"tick":4800,"correct":false,"targetId":null},{"tick":4810,"correct":true,"targetId":2}],
+      "expected":{"start":4800,"keep":[0,1],"combo":0,"maxCombo":2,"history":[{"tick":0,"correct":true,"targetId":0},{"tick":1000,"correct":true,"targetId":1},{"tick":4799,"correct":false,"targetId":null}]}
+    }
+  ]
 }

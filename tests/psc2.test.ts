@@ -67,6 +67,46 @@ describe("PSC2 semantic and independent field checks", () => {
     expect(() => encodeScore(s)).toThrow("部分覆盖");
   });
   it.each([
+    [1, 1, "an overfull middle measure"],
+    [1, 8, "an incomplete middle measure"],
+    [0, 1, "an overfull first measure"],
+    [2, 1, "an overfull final measure"],
+  ] as const)(
+    "rejects invalid meter length at measure %s, numerator %s: %s",
+    (index, numerator) => {
+      const bytes = mutate(4, (_v, start, b) => {
+        b[start + index * 16 + 12] = numerator;
+      });
+      expect(() => parseScore(bytes)).toThrow("小节时长与拍号不一致");
+    },
+  );
+  it("allows incomplete edge measures and complete measures in a different meter", () => {
+    const bytes = mutate(4, (_v, start, b) => {
+      // The first/final 3840-tick measures are incomplete 8/4 bars.
+      b[start + 12] = 8;
+      b[start + 32 + 12] = 8;
+      // The middle 3840-tick measure remains complete in 8/8.
+      b[start + 16 + 12] = 8;
+      b[start + 16 + 13] = 3;
+    });
+    expect(
+      parseScore(bytes).measures.map((m) => [m.numerator, m.denominatorPow]),
+    ).toEqual([[8, 2], [8, 3], [8, 2]]);
+  });
+  it("allows one incomplete measure when it is both the first and final measure", () => {
+    const source = engineeringSource();
+    source.measures = [{
+      index: 0,
+      startTick: 0,
+      endTick: source.durationTicks,
+      numerator: 16,
+      denominatorPow: 2,
+    }];
+    source.anchors = source.anchors.filter((a) => a.measureIndex === 0);
+    // Removing the old measure boundaries removes no safe candidate here.
+    expect(parseScore(encodeScore(source)).measures).toEqual(source.measures);
+  });
+  it.each([
     [
       2,
       "flags",

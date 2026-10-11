@@ -108,19 +108,25 @@ export function rollback(
   safe: number[],
   pause: number,
   results: { id: number; start: number }[],
-  history: { tick: number; correct: boolean }[],
+  history: { tick: number; correct: boolean; targetId: number | null }[],
 ) {
   const start = safe.filter((t) => t <= pause).at(-1) ?? 0;
+  const keep = results.filter((r) => r.start < start).map((r) => r.id);
+  const keptTargets = new Set(keep);
   let combo = 0,
     maxCombo = 0;
-  const retained = history.filter((e) => e.tick < start);
+  // Hits and Misses belong to the target, even when their actual event/expiry
+  // falls across the restart boundary. Only extra notes have no target.
+  const retained = history.filter((e) =>
+    e.targetId === null ? e.tick < start : keptTargets.has(e.targetId),
+  );
   for (const e of retained) {
     combo = e.correct ? combo + 1 : 0;
     maxCombo = Math.max(maxCombo, combo);
   }
   return {
     start,
-    keep: results.filter((r) => r.start < start).map((r) => r.id),
+    keep,
     combo,
     maxCombo,
     history: retained,

@@ -348,6 +348,12 @@ export function parseScore(input: Uint8Array): Score {
         u16(o + 14) === 0,
       "小节顺序、范围或拍号错误",
     );
+    const fullLength = (PPQ * 4 * numerator) / 2 ** denominatorPow;
+    const edge = index === 0 || stop === duration;
+    check(
+      edge ? stop - start <= fullLength : stop - start === fullLength,
+      "小节时长与拍号不一致：仅首尾允许不完整小节",
+    );
     measures.push({
       startTick: start,
       endTick: stop,

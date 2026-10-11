@@ -45,6 +45,30 @@ describe("offline FPGA handoff with fixed independent expectations", () => {
     for (const [pause, start] of v.additional_pause_start)
       expect(rollback(v.safe, pause!, [], []).start).toBe(start);
   });
+  it.each(vectors.rollback_boundaries)(
+    "rolls back $name by target ownership",
+    (v) => {
+      expect(rollback(v.safe, v.pause, v.results, v.history)).toEqual(v.expected);
+    },
+  );
+  it("recomputes current and maximum combo on a second earlier rollback", () => {
+    const v = vectors.rollback;
+    const first = rollback(v.safe, v.pause, v.results, v.history);
+    expect(
+      rollback(
+        v.safe,
+        5000,
+        v.results.filter((r) => first.keep.includes(r.id)),
+        first.history,
+      ),
+    ).toEqual({
+      start: 4800,
+      keep: [0],
+      combo: 1,
+      maxCombo: 1,
+      history: [{ tick: 0, correct: true, targetId: 0 }],
+    });
+  });
   it("matches Python struct/zlib final-package pixels, CRCs, anchors and safe tables", () => {
     for (const item of packages) {
       const s = parseScore(new Uint8Array(readFileSync(item.file)));

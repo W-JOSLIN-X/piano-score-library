@@ -24,6 +24,9 @@ The scoring vectors cover exact boundaries, missing targets versus missed
 targets, selected/unselected/common parts, duplicate consumption, extra notes,
 Combo and safe rollback. The matching helper does not simulate an entire FPGA
 audio/event scheduler; expiry/Miss ordering is represented by explicit history.
+Rollback hit/Miss history carries its target ID and follows that target's
+retention; only extra-note history (`targetId: null`) uses the actual event tick.
+Boundary vectors cover early hits, late hits/Misses and repeated rollback.
 Raw SPI timestamp calibration, live key/pedal release gating, countdown, HDMI
 timing and physical storage still need hardware tests.
 
