@@ -71,6 +71,18 @@ export function dataPayload(score: Score, index: number): Uint8Array {
   b.set(data, 20);
   return b;
 }
+/** Validate a parsed package before any destructive replacement operation. */
+export function validateDeviceSupport(score: Score, caps: Caps): void {
+  if (
+    score.bytes.length > caps.max_file_bytes ||
+    score.notes.length > caps.max_notes ||
+    score.pages.length > caps.max_pages ||
+    score.sectionCount > caps.max_sections
+  )
+    throw Error("曲目超过设备能力上限");
+  if (score.pages.some((p) => !caps.profiles.includes(p.profile)))
+    throw Error("设备不支持曲目谱面 profile");
+}
 export async function transferScore(
   link: DeviceLink,
   input: Score,
@@ -82,15 +94,7 @@ export async function transferScore(
     blocks = Math.ceil(score.bytes.length / 512);
   const status = validateStatus(await link.request(CMD.STATUS));
   if (status.mode !== 0) throw new TransferStopped();
-  if (
-    score.bytes.length > caps.max_file_bytes ||
-    score.notes.length > caps.max_notes ||
-    score.pages.length > caps.max_pages ||
-    score.sectionCount > caps.max_sections
-  )
-    throw Error("曲目超过设备能力上限");
-  if (score.pages.some((p) => !caps.profiles.includes(p.profile)))
-    throw Error("设备不支持曲目谱面 profile");
+  validateDeviceSupport(score, caps);
   if (signal.aborted) throw Error("传输尚未开始");
   let accepted = false,
     committing = false,

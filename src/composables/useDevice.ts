@@ -7,6 +7,7 @@ import {
   validateStatus,
   listEntries,
   transferScore,
+  validateDeviceSupport,
   deleteEntry,
   matchesScore,
   TransferPaused,
@@ -35,12 +36,50 @@ const busy = ref(false),
 const transferKind = ref<"ble" | "demo">();
 const demoStorage = new DemoStorage(),
   sources = new Map<string, Score>();
-const pendingCommits = new Map<string, Score>(),
-  pendingDeletes = new Map<string, Entry>();
+type Operation = {
+  device: string;
+  id: string;
+  action: "upload" | "delete";
+  kind: "ble" | "demo";
+  title: string;
+  bytes: number;
+};
+let currentOperation: Operation | undefined;
+const pendingCommits = new Map<string, { score: Score; operation: Operation }>(),
+  pendingDeletes = new Map<string, { entry: Entry; operation: Operation }>();
 let abort: AbortController | undefined,
   dirty = false,
   scheduled = false;
 const message = (e: unknown) => (e instanceof Error ? e.message : String(e));
+function startOperation(
+  current: DeviceLink,
+  id: string,
+  title: string,
+  bytes: number,
+  action: Operation["action"],
+) {
+  const operation: Operation = {
+    device: current.identity, id, title, bytes, action, kind: current.kind,
+  };
+  currentOperation = operation;
+  transferTitle.value = title;
+  transferKind.value = current.kind;
+  totalBytes.value = bytes;
+  savedBytes.value = 0;
+  progress.value = 0;
+  stage.value = operation.action === "upload" ? "准备传输" : "正在删除";
+  return operation;
+}
+function reconcileOperation(operation: Operation, text: string, stored = false) {
+  // A later operation, including one with the same UUID, owns its own result.
+  if (currentOperation !== operation) return;
+  transferTitle.value = operation.title;
+  transferKind.value = operation.kind;
+  totalBytes.value = stored ? operation.bytes : 0;
+  savedBytes.value = stored ? operation.bytes : 0;
+  progress.value = stored ? 100 : 0;
+  stage.value = text;
+}
 async function refresh() {
   const current = link.value;
   if (!current) return;
@@ -52,21 +91,20 @@ async function refresh() {
     status.value = nextStatus;
     entries.value = nextEntries;
     directory.value = "known";
-    for (const [key, score] of pendingCommits)
+    for (const [key, { score, operation }] of pendingCommits)
       if (key === current.identity + ":" + score.id) {
         if (
           nextEntries.some((e) => e.entry_state === 2 && matchesScore(e, score))
         ) {
-          stage.value = "已核对保存成功";
-          progress.value = 100;
+          reconcileOperation(operation, "已核对保存成功", true);
           pendingCommits.delete(key);
         }
       }
-    for (const [key, entry] of pendingDeletes)
+    for (const [key, { entry, operation }] of pendingDeletes)
       if (key === current.identity + ":" + entry.id) {
-        stage.value = nextEntries.some((e) => e.id === entry.id)
+        reconcileOperation(operation, nextEntries.some((e) => e.id === entry.id)
           ? "该 UUID 仍存在，未确认删除；不会自动重试"
-          : "已核对曲目不存在";
+          : "已核对曲目不存在");
         pendingDeletes.delete(key);
       }
   } catch (e) {
@@ -127,6 +165,10 @@ async function upload(score: Score, replace = false) {
   const current = link.value,
     c = caps.value;
   if (!current || !c) throw Error("请先连接设备");
+  const operation = startOperation(
+    current, score.id, String(score.meta.title), score.bytes.length, "upload",
+  );
+  if (replace) validateDeviceSupport(parseScore(score.bytes), c);
   sources.set(score.id, score);
   const existing = (await listEntries(current)).find((e) => e.id === score.id);
   if (existing?.entry_state === 2) {
@@ -136,19 +178,13 @@ async function upload(score: Score, replace = false) {
       entries.value = entries.value.filter((e) => e.id !== existing.id);
     } catch (e) {
       if (e instanceof UnknownDelete) {
-        pendingDeletes.set(current.identity + ":" + existing.id, existing);
+        pendingDeletes.set(operation.device + ":" + operation.id, { entry: existing, operation });
         stage.value = "删除结果未确认，重连后先核对目录";
       }
       throw e;
     }
   }
   abort = new AbortController();
-  transferKind.value = current.kind;
-  progress.value = 0;
-  savedBytes.value = 0;
-  totalBytes.value = score.bytes.length;
-  stage.value = "准备传输";
-  transferTitle.value = String(score.meta.title);
   try {
     await transferScore(current, score, c, abort.signal, (bytes, text) => {
       savedBytes.value = bytes;
@@ -157,7 +193,7 @@ async function upload(score: Score, replace = false) {
     });
   } catch (e) {
     if (e instanceof UnknownCommit)
-      pendingCommits.set(current.identity + ":" + score.id, score);
+      pendingCommits.set(operation.device + ":" + operation.id, { score, operation });
     stage.value =
       e instanceof TransferPaused
         ? "已暂停，进度保留"
@@ -249,16 +285,13 @@ export function useDevice() {
       guarded(async () => {
         const current = link.value;
         if (!current) throw Error("设备未连接");
-        transferTitle.value = entry.title;
-        transferKind.value = current.kind;
-        totalBytes.value = 0;
-        savedBytes.value = 0;
+        const operation = startOperation(current, entry.id, entry.title, 0, "delete");
         try {
           await deleteEntry(current, entry);
           stage.value = "已删除";
         } catch (e) {
           if (e instanceof UnknownDelete) {
-            pendingDeletes.set(current.identity + ":" + entry.id, entry);
+            pendingDeletes.set(operation.device + ":" + operation.id, { entry, operation });
             stage.value = "删除结果未确认，重连后先核对目录";
           }
           throw e;
