@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { parseScore } from "../src/lib/pseq";
 import { CMD } from "../src/lib/wire";
 import { ERR } from "../src/lib/protocol";
-import type { Caps } from "../src/lib/device";
+import type { Caps, Entry } from "../src/lib/device";
 import { encodeScore } from "../tools/encode-score";
 import { engineeringSource } from "./fixtures/engineering";
 import type { useDevice } from "../src/composables/useDevice";
@@ -120,6 +120,7 @@ describe("visible directory and transfer state", () => {
     };
     await finish(d.upload(replacement, true));
     expect(d.error.value).toMatch(/能力|profile/);
+    expect(d.stage.value).toBe("下载未开始");
     expect(calls).not.toContain(CMD.DELETE);
     expect(calls).not.toContain(CMD.BEGIN);
     await finish(d.refresh());
@@ -130,6 +131,212 @@ describe("visible directory and transfer state", () => {
       total_bytes: old.bytes.length,
       file_crc: old.crc,
     });
+  });
+  it("rejects a corrupted replacement before deleting the complete old package", async () => {
+    const replacement = score(),
+      old = smallScore(replacement.id, "保留的旧曲目");
+    await finish(d.upload(old));
+    replacement.bytes = replacement.bytes.slice();
+    replacement.bytes[0] = 0;
+    const link = d.link.value!,
+      original = link.request.bind(link),
+      calls: number[] = [];
+    link.request = async (type, payload) => {
+      calls.push(type);
+      return original(type, payload) as never;
+    };
+    await finish(d.upload(replacement, true));
+    expect(d.error.value).not.toBe("");
+    expect(d.stage.value).toBe("下载未开始");
+    expect(calls).not.toContain(CMD.DELETE);
+    expect(calls).not.toContain(CMD.BEGIN);
+    await finish(d.refresh());
+    expect(d.entries.value).toHaveLength(1);
+    expect(d.entries.value[0]).toMatchObject({
+      id: old.id,
+      entry_state: 2,
+      total_bytes: old.bytes.length,
+      file_crc: old.crc,
+    });
+  });
+  it("shows a new upload rejected by local capability checks as not started", async () => {
+    const uploaded = score(),
+      link = d.link.value!,
+      original = link.request.bind(link),
+      calls: number[] = [];
+    d.caps.value!.max_file_bytes = uploaded.bytes.length - 4;
+    link.request = async (type, payload) => {
+      calls.push(type);
+      return original(type, payload) as never;
+    };
+    await finish(d.upload(uploaded));
+    expect(d.error.value).toContain("能力");
+    expect(d.stage.value).toBe("下载未开始");
+    expect(d.savedBytes.value).toBe(0);
+    expect(calls).not.toContain(CMD.BEGIN);
+    expect(d.entries.value).toEqual([]);
+  });
+  it.each([
+    { command: CMD.BEGIN, code: ERR.NO_SPACE },
+    { command: CMD.COMMIT, code: ERR.BAD_PACKAGE },
+  ])("distinguishes explicit device rejection at command $command from unknown storage", async ({ command, code }) => {
+    const { DeviceError } = await import("../src/lib/device");
+    const uploaded = smallScore("12345678-1234-5678-9abc-def012345678", "明确拒绝"),
+      link = d.link.value!,
+      original = link.request.bind(link);
+    link.request = async (type, payload) => {
+      if (type === command) throw new DeviceError(code);
+      return original(type, payload) as never;
+    };
+    await finish(d.upload(uploaded));
+    expect(d.error.value).toMatch(/NO_SPACE|BAD_PACKAGE/);
+    expect(d.stage.value).toBe("设备拒绝下载");
+    expect(d.entries.value.every((entry) => entry.entry_state === 1)).toBe(true);
+  });
+  it("distinguishes an interrupted DATA request from an unknown COMMIT result", async () => {
+    const { TransportError } = await import("../src/lib/device");
+    const link = d.link.value!,
+      original = link.request.bind(link);
+    let blocks = 0;
+    link.request = async (type, payload) => {
+      if (type === CMD.DATA && ++blocks === 2)
+        throw new TransportError("ACK_TIMEOUT", "DATA reply lost");
+      return original(type, payload) as never;
+    };
+    await finish(d.upload(score()));
+    expect(d.error.value).toContain("DATA reply lost");
+    expect(d.stage.value).toBe("传输中断，请查询设备进度");
+    expect(d.savedBytes.value).toBe(512);
+    expect(d.entries.value[0]).toMatchObject({ entry_state: 1, next_block: 1 });
+  });
+  it("keeps a newer CHANGED mode when an older STATUS finishes and the follow-up query fails", async () => {
+    const { TransportError } = await import("../src/lib/device");
+    const link = d.link.value!,
+      original = link.request.bind(link),
+      modesAtFollowUp: (number | undefined)[] = [];
+    let statuses = 0;
+    link.request = async (type, payload) => {
+      if (type === CMD.STATUS && ++statuses > 1) {
+        modesAtFollowUp.push(d.status.value?.mode);
+        throw new TransportError("ACK_TIMEOUT", "STATUS reply lost");
+      }
+      const result = await original(type, payload);
+      if (type === CMD.STATUS) {
+        d.toggleDemoState();
+        expect(d.status.value?.mode).toBe(3);
+      }
+      return result as never;
+    };
+    await finish(d.refresh());
+    expect(modesAtFollowUp).toEqual([3]);
+    expect(d.status.value?.mode).toBe(3);
+    expect(d.directory.value).toBe("unknown");
+    expect(d.error.value).toContain("STATUS reply lost");
+    expect(d.busy.value).toBe(false);
+  });
+  it("keeps a CHANGED mode received during LIST when the next STATUS query fails", async () => {
+    const { TransportError } = await import("../src/lib/device");
+    const link = d.link.value!,
+      original = link.request.bind(link),
+      modesAtFollowUp: (number | undefined)[] = [];
+    let statuses = 0,
+      notified = false;
+    link.request = async (type, payload) => {
+      if (type === CMD.STATUS && ++statuses > 1) {
+        modesAtFollowUp.push(d.status.value?.mode);
+        throw new TransportError("ACK_TIMEOUT", "STATUS reply lost");
+      }
+      const result = await original(type, payload);
+      if (type === CMD.LIST && !notified) {
+        notified = true;
+        d.toggleDemoState();
+        expect(d.status.value?.mode).toBe(3);
+      }
+      return result as never;
+    };
+    await finish(d.refresh());
+    expect(notified).toBe(true);
+    expect(modesAtFollowUp).toEqual([3]);
+    expect(d.status.value?.mode).toBe(3);
+    expect(d.directory.value).toBe("unknown");
+    expect(d.error.value).toContain("STATUS reply lost");
+    expect(d.busy.value).toBe(false);
+  });
+  it("does not retain a resume source when BEGIN was explicitly rejected", async () => {
+    const { DeviceError } = await import("../src/lib/device");
+    const uploaded = smallScore("12345678-1234-5678-9abc-def012345678", "未被接受的曲目"),
+      link = d.link.value!,
+      original = link.request.bind(link);
+    const fetchCatalog = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => [],
+    });
+    vi.stubGlobal("fetch", fetchCatalog);
+    link.request = async (type, payload) => {
+      if (type === CMD.BEGIN) throw new DeviceError(ERR.NO_SPACE);
+      return original(type, payload) as never;
+    };
+    await finish(d.upload(uploaded));
+    expect(d.error.value).toContain("NO_SPACE");
+    expect(fetchCatalog).not.toHaveBeenCalled();
+    const calls: number[] = [];
+    link.request = async (type, payload) => {
+      calls.push(type);
+      return original(type, payload) as never;
+    };
+    const staleEntry: Entry = {
+      id: uploaded.id,
+      title: String(uploaded.meta.title),
+      entry_state: 1,
+      total_bytes: uploaded.bytes.length,
+      file_crc: uploaded.crc,
+      capabilities: uploaded.capabilities,
+      next_block: 0,
+      total_blocks: Math.ceil(uploaded.bytes.length / 512),
+    };
+    await finish(d.resume(staleEntry));
+    expect(fetchCatalog).toHaveBeenCalledOnce();
+    expect(fetchCatalog.mock.calls[0]![0]).toMatch(/scores\/catalog\.json$/);
+    expect(d.error.value).toContain("重新导入");
+    expect(calls).not.toContain(CMD.BEGIN);
+  });
+  it("uses an accepted source for resume and releases it after confirmed deletion", async () => {
+    const uploaded = score(),
+      link = d.link.value!,
+      original = link.request.bind(link);
+    const fetchCatalog = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => [],
+    });
+    vi.stubGlobal("fetch", fetchCatalog);
+    let paused = false;
+    link.request = async (type, payload) => {
+      if (type === CMD.DATA && !paused) {
+        paused = true;
+        d.pause();
+      }
+      return original(type, payload) as never;
+    };
+    await finish(d.upload(uploaded));
+    expect(d.stage.value).toBe("已暂停，进度保留");
+    const partial = d.entries.value[0]!;
+    expect(partial).toMatchObject({ entry_state: 1, next_block: 1 });
+    link.request = original;
+    await finish(d.resume(partial));
+    expect(fetchCatalog).not.toHaveBeenCalled();
+    expect(d.stage.value).toBe("已保存");
+    await finish(d.remove(d.entries.value[0]!));
+    expect(d.stage.value).toBe("已删除");
+    expect(d.entries.value).toEqual([]);
+    const calls: number[] = [];
+    link.request = async (type, payload) => {
+      calls.push(type);
+      return original(type, payload) as never;
+    };
+    await finish(d.resume(partial));
+    expect(fetchCatalog).toHaveBeenCalledOnce();
+    expect(d.error.value).toContain("重新导入");
+    expect(calls).not.toContain(CMD.BEGIN);
   });
   it("does not label rejected B as saved while reconciling A's unknown COMMIT", async () => {
     const { DeviceError, TransportError } = await import("../src/lib/device");
@@ -211,6 +418,39 @@ describe("visible directory and transfer state", () => {
     expect(d.savedBytes.value).toBe(1024);
     await finish(d.resume(d.entries.value[0]!));
     expect(d.stage.value).toBe("已保存");
+  });
+  it("keeps the pause-in-progress stage while PAUSE is still waiting for its ACK", async () => {
+    const link = d.link.value!,
+      original = link.request.bind(link);
+    let releasePause!: () => void;
+    const waitingForPause = new Promise<void>((resolve) => {
+      releasePause = resolve;
+    });
+    let blocks = 0,
+      pauses = 0;
+    link.request = async (type, payload) => {
+      if (type === CMD.DATA && ++blocks === 1) d.pause();
+      if (type === CMD.PAUSE) {
+        pauses++;
+        await waitingForPause;
+      }
+      return original(type, payload) as never;
+    };
+    const sending = d.upload(score());
+    try {
+      await vi.runAllTimersAsync();
+      expect(pauses).toBe(1);
+      expect(blocks).toBe(1);
+      expect(d.busy.value).toBe(true);
+      expect(d.savedBytes.value).toBe(512);
+      expect(d.stage.value).toContain("暂停");
+      expect(d.stage.value).not.toBe("正在传输");
+    } finally {
+      releasePause();
+      await finish(sending);
+    }
+    expect(d.stage.value).toBe("已暂停，进度保留");
+    expect(d.entries.value[0]).toMatchObject({ entry_state: 1, next_block: 1 });
   });
   it("reconciles an unknown re-download deletion before issuing any new BEGIN", async () => {
     await finish(d.upload(score()));

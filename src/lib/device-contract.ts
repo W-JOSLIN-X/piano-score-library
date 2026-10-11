@@ -176,7 +176,7 @@ export async function listEntries(link: DeviceLink): Promise<Entry[]> {
       generation = 0;
     const result: Entry[] = [],
       ids = new Set<string>(),
-      cursors = new Set<number>();
+      cursors = new Set<number>([0]);
     try {
       for (let page = 0; page < 65536; page++) {
         const r = await link.request<{
@@ -206,7 +206,6 @@ export async function listEntries(link: DeviceLink): Promise<Entry[]> {
         if (r.next_cursor === null) return result;
         ensure(
           isU32(r.next_cursor) &&
-            r.next_cursor > cursor &&
             !cursors.has(r.next_cursor) &&
             r.items.length === 1,
           "设备目录游标错误",
