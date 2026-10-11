@@ -1,5 +1,7 @@
 import { crc32, parseScore, uuid } from "./pseq";
-import { CMD, ERR, isId, isU32, validTitle } from "./protocol";
+import {
+  BLOCK_BYTES, MAX_PAYLOAD, CMD, ERR, isId, isU32, validTitle,
+} from "./protocol";
 import { readJson } from "./wire";
 import {
   DeviceError,
@@ -25,8 +27,8 @@ export class DemoStorage {
     protocol: 2,
     package_major: 2,
     uart_version: 2,
-    max_payload: 1024,
-    block_bytes: 512,
+    max_payload: MAX_PAYLOAD,
+    block_bytes: BLOCK_BYTES,
     max_write: 128,
     max_file_bytes: 4 * 1048576,
     max_notes: 20000,
@@ -93,12 +95,10 @@ export class DemoLink implements DeviceLink {
   kind = "demo" as const;
   name = "演示设备 · 当前浏览器内存";
   closed = false;
-  mode: number;
   onDisconnect?: () => void;
   onChanged?: (event: Changed) => void;
   private queue: Promise<unknown> = Promise.resolve();
   private listener = (event: Changed) => {
-    this.mode = event.mode;
     this.onChanged?.(event);
   };
   constructor(
@@ -106,7 +106,6 @@ export class DemoLink implements DeviceLink {
     readonly faults: DemoFaults = {},
     readonly latency = 8,
   ) {
-    this.mode = storage.mode;
     storage.listeners.add(this.listener);
   }
   get identity() {
@@ -140,7 +139,10 @@ export class DemoLink implements DeviceLink {
       id: r.entry.id,
       next_block: r.entry.next_block,
       total_blocks: r.entry.total_blocks,
-      saved_bytes: Math.min(r.entry.next_block * 512, r.entry.total_bytes),
+      saved_bytes: Math.min(
+        r.entry.next_block * BLOCK_BYTES,
+        r.entry.total_bytes,
+      ),
     });
     const object = () => {
       try {
@@ -151,7 +153,7 @@ export class DemoLink implements DeviceLink {
         throw new DeviceError(ERR.BAD_REQUEST);
       }
     };
-    if (payload.length > 1024) throw new DeviceError(ERR.BAD_REQUEST);
+    if (payload.length > MAX_PAYLOAD) throw new DeviceError(ERR.BAD_REQUEST);
     switch (type) {
       case CMD.CAPS:
         return { ...s.caps, profiles: [...s.caps.profiles] };
@@ -194,9 +196,9 @@ export class DemoLink implements DeviceLink {
           !isU32(p.total_bytes) ||
           p.total_bytes < 64 ||
           !isU32(p.file_crc) ||
-          p.block_bytes !== 512 ||
+          p.block_bytes !== BLOCK_BYTES ||
           p.package_major !== 2 ||
-          p.total_blocks !== Math.ceil(p.total_bytes / 512) ||
+          p.total_blocks !== Math.ceil(p.total_bytes / BLOCK_BYTES) ||
           !isU32(p.capabilities) ||
           p.capabilities < 1 ||
           p.capabilities & ~7
@@ -247,7 +249,7 @@ export class DemoLink implements DeviceLink {
       }
       case CMD.DATA: {
         requireManagement();
-        if (payload.length < 21 || payload.length > 532)
+        if (payload.length < 21 || payload.length > 20 + BLOCK_BYTES)
           throw new DeviceError(ERR.BAD_REQUEST);
         const id = uuid(payload.subarray(0, 16)),
           index = new DataView(
@@ -258,7 +260,10 @@ export class DemoLink implements DeviceLink {
           r = s.records.get(id);
         if (!r || s.activeId !== id || r.entry.entry_state !== 1)
           throw new DeviceError(ERR.BAD_BLOCK);
-        const length = Math.min(512, r.entry.total_bytes - index * 512),
+        const length = Math.min(
+            BLOCK_BYTES,
+            r.entry.total_bytes - index * BLOCK_BYTES,
+          ),
           data = payload.subarray(20);
         if (
           index >= r.entry.total_blocks ||
@@ -267,11 +272,11 @@ export class DemoLink implements DeviceLink {
         )
           throw new DeviceError(ERR.BAD_BLOCK, r.entry.next_block);
         if (index < r.entry.next_block) {
-          if (!data.every((b, i) => b === r.bytes[index * 512 + i]))
+          if (!data.every((b, i) => b === r.bytes[index * BLOCK_BYTES + i]))
             throw new DeviceError(ERR.CONTENT_MISMATCH);
           return progress(r);
         }
-        r.bytes.set(data, index * 512);
+        r.bytes.set(data, index * BLOCK_BYTES);
         r.entry.next_block++;
         return progress(r);
       }

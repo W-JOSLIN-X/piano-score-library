@@ -3,6 +3,7 @@ import { computed, reactive, ref } from "vue";
 import { useRoute } from "vue-router";
 import { useDevice } from "../composables/useDevice";
 import { formatBytes } from "../lib/binary";
+import { BLOCK_BYTES } from "../lib/protocol";
 const open = ref(false),
   route = useRoute(),
   d = reactive(useDevice());
@@ -111,8 +112,8 @@ const links = [
                 <template v-if="d.totalBytes">
                   · 已确认 {{ formatBytes(d.savedBytes) }} /
                   {{ formatBytes(d.totalBytes) }} ·
-                  {{ Math.ceil(d.savedBytes / 512) }} /
-                  {{ Math.ceil(d.totalBytes / 512) }} 块</template
+                  {{ Math.ceil(d.savedBytes / BLOCK_BYTES) }} /
+                  {{ Math.ceil(d.totalBytes / BLOCK_BYTES) }} 块</template
                 ></span
               >
             </div>

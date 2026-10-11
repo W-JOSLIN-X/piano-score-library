@@ -99,7 +99,9 @@ describe("real BLE client with mocked GATT", () => {
       CMD.CHANGED,
     );
     expect(changed).toHaveBeenCalledTimes(1);
-    expect(link.mode).toBe(3);
+    expect(changed).toHaveBeenCalledWith(
+      expect.objectContaining({ generation: 2, mode: 3, phase: 0 }),
+    );
     reply(f, { mode: 3 });
     await expect(first).resolves.toMatchObject({ mode: 3 });
     await expect(second).resolves.toMatchObject({ items: [] });

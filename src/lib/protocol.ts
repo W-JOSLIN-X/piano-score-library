@@ -13,7 +13,16 @@ export const ERR = {
   CONTENT_MISMATCH: 9, NOT_FOUND: 10, STALE_LIST: 11, ALREADY_STORED: 12, BAD_REQUEST: 13,
 } as const;
 export const SECTION = { META: 1, NOTE: 2, CC: 3, MEASURE: 4, PAGE: 5, BITMAP: 6, ANCHOR: 7, SAFE_START: 8 } as const;
-export const RECORD_BYTES: Record<number, number> = { 1: 0, 2: 16, 3: 8, 4: 16, 5: 24, 6: 0, 7: 24, 8: 4 };
+export const RECORD_BYTES: Record<number, number> = {
+  [SECTION.META]: 0,
+  [SECTION.NOTE]: 16,
+  [SECTION.CC]: 8,
+  [SECTION.MEASURE]: 16,
+  [SECTION.PAGE]: 24,
+  [SECTION.BITMAP]: 0,
+  [SECTION.ANCHOR]: 24,
+  [SECTION.SAFE_START]: 4,
+};
 export const DYNAMICS = ["未指定", "pp", "p", "mp", "mf", "f", "ff"] as const;
 export const MODE_NAMES = ["曲库管理", "自由演奏", "曲谱阅读", "跟谱练习"] as const;
 export const isU32 = (x: unknown): x is number => typeof x === "number" && Number.isInteger(x) && x >= 0 && x <= 0xffffffff;

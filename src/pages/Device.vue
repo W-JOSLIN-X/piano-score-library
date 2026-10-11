@@ -2,6 +2,7 @@
 import { reactive, ref } from "vue";
 import { useDevice } from "../composables/useDevice";
 import { formatBytes } from "../lib/pseq";
+import { BLOCK_BYTES, MODE_NAMES } from "../lib/protocol";
 import type { Entry } from "../lib/device";
 const d = reactive(useDevice()),
   deleting = ref<Entry>(),
@@ -10,7 +11,6 @@ const supported =
   typeof navigator !== "undefined" &&
   !!navigator.bluetooth &&
   window.isSecureContext;
-const states = ["曲库管理", "自由演奏", "曲谱阅读", "跟谱练习"];
 const action = ref<"delete" | "redownload">("delete");
 </script>
 <template>
@@ -92,7 +92,7 @@ const action = ref<"delete" | "redownload">("delete");
     </div>
     <div v-if="d.link && d.status" class="device-summary">
       <div>
-        <span>当前状态</span><strong>{{ states[d.status.mode] }}</strong>
+        <span>当前状态</span><strong>{{ MODE_NAMES[d.status.mode] }}</strong>
       </div>
       <div>
         <span>可用空间</span
@@ -155,7 +155,9 @@ const action = ref<"delete" | "redownload">("delete");
           <p class="uuid-label">{{ e.id }}</p>
           <p>
             {{ e.entry_state === 2 ? "完整 · 可用" : "未完成" }} ·
-            {{ formatBytes(Math.min(e.next_block * 512, e.total_bytes)) }} /
+            {{
+              formatBytes(Math.min(e.next_block * BLOCK_BYTES, e.total_bytes))
+            }} /
             {{ formatBytes(e.total_bytes) }} · {{ e.next_block }} /
             {{ e.total_blocks }} 块 ·
             {{

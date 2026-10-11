@@ -1,4 +1,6 @@
-import { CMD, ERR, isId, isU32, validTitle } from "./protocol";
+import {
+  BLOCK_BYTES, MAX_PAYLOAD, CMD, ERR, isId, isU32, validTitle,
+} from "./protocol";
 import { jsonBytes } from "./wire";
 export type Caps = {
   request_type: number;
@@ -48,7 +50,6 @@ export interface DeviceLink {
   name: string;
   readonly identity: string;
   closed: boolean;
-  mode?: number;
   request<T>(type: number, payload?: Uint8Array, timeout?: number): Promise<T>;
   close(): void;
   onDisconnect?: () => void;
@@ -99,8 +100,8 @@ export function validateCaps(x: Caps): Caps {
       x.protocol === 2 &&
       x.package_major === 2 &&
       x.uart_version === 2 &&
-      x.max_payload === 1024 &&
-      x.block_bytes === 512 &&
+      x.max_payload === MAX_PAYLOAD &&
+      x.block_bytes === BLOCK_BYTES &&
       isU32(x.max_write) &&
       x.max_write >= 20 &&
       x.max_write <= 512,
@@ -163,7 +164,7 @@ export function validateEntry(e: Entry): Entry {
       e.capabilities > 0 &&
       !(e.capabilities & ~7) &&
       isU32(e.next_block) &&
-      e.total_blocks === Math.ceil(e.total_bytes / 512) &&
+      e.total_blocks === Math.ceil(e.total_bytes / BLOCK_BYTES) &&
       e.next_block <= e.total_blocks &&
       (e.entry_state !== 2 || e.next_block === e.total_blocks),
     "设备目录条目错误",

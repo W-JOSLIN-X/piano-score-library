@@ -1,5 +1,5 @@
 import { parseScore, uuidBytes, type Score } from "./pseq";
-import { CMD } from "./protocol";
+import { BLOCK_BYTES, CMD, ERR } from "./protocol";
 import { jsonBytes } from "./wire";
 import {
   ensure,
@@ -45,7 +45,7 @@ export function validateProgress(
   score: Score,
   next?: number,
 ): Progress {
-  const blocks = Math.ceil(score.bytes.length / 512);
+  const blocks = Math.ceil(score.bytes.length / BLOCK_BYTES);
   ensure(
     r &&
       r.request_type === type &&
@@ -54,7 +54,8 @@ export function validateProgress(
       r.next_block >= 0 &&
       r.next_block <= blocks &&
       r.total_blocks === blocks &&
-      r.saved_bytes === Math.min(r.next_block * 512, score.bytes.length) &&
+      r.saved_bytes ===
+        Math.min(r.next_block * BLOCK_BYTES, score.bytes.length) &&
       (next === undefined || r.next_block === next),
     "设备确认进度与曲目不匹配",
   );
@@ -62,8 +63,8 @@ export function validateProgress(
 }
 export function dataPayload(score: Score, index: number): Uint8Array {
   const data = score.bytes.subarray(
-    index * 512,
-    Math.min((index + 1) * 512, score.bytes.length),
+    index * BLOCK_BYTES,
+    Math.min((index + 1) * BLOCK_BYTES, score.bytes.length),
   );
   const b = new Uint8Array(20 + data.length);
   b.set(uuidBytes(score.id));
@@ -91,7 +92,7 @@ export async function transferScore(
   progress: (savedBytes: number, stage: string) => void,
 ): Promise<void> {
   const score = parseScore(input.bytes),
-    blocks = Math.ceil(score.bytes.length / 512);
+    blocks = Math.ceil(score.bytes.length / BLOCK_BYTES);
   const status = validateStatus(await link.request(CMD.STATUS));
   if (status.mode !== 0) throw new TransferStopped();
   validateDeviceSupport(score, caps);
@@ -118,7 +119,7 @@ export async function transferScore(
       );
       if (st.active_id === score.id || !entry)
         throw Error("暂停结果未确认，请刷新目录核对");
-      confirmed = Math.min(entry.next_block * 512, entry.total_bytes);
+      confirmed = Math.min(entry.next_block * BLOCK_BYTES, entry.total_bytes);
     }
     progress(confirmed, "已暂停，进度保留");
     throw new TransferPaused(confirmed);
@@ -134,7 +135,7 @@ export async function transferScore(
           id: score.id,
           total_bytes: score.bytes.length,
           file_crc: score.crc,
-          block_bytes: 512,
+          block_bytes: BLOCK_BYTES,
           package_major: 2,
           total_blocks: blocks,
           capabilities: score.capabilities,
@@ -219,7 +220,8 @@ export async function deleteEntry(
   entry: Entry,
 ): Promise<void> {
   const status = validateStatus(await link.request(CMD.STATUS));
-  if (status.mode !== 0) throw new DeviceError(1, null, "设备不在曲库管理状态");
+  if (status.mode !== 0)
+    throw new DeviceError(ERR.BUSY, null, "设备不在曲库管理状态");
   try {
     const r = await link.request<{
       request_type: number;

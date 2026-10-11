@@ -3,6 +3,7 @@ import { computed, nextTick, onBeforeUnmount, ref, watch } from "vue";
 import { formatTime } from "../lib/pseq";
 import { tickToMs, type Score } from "../lib/psc2";
 import { ScoreTimeline } from "../lib/timeline";
+import { PPQ } from "../lib/protocol";
 const props = defineProps<{ score: Score }>();
 const tab = ref("五线谱"),
   pageIndex = ref(0),
@@ -103,7 +104,7 @@ function frame(t: number) {
     if (last)
       time.value = Math.min(
         props.score.durationTicks,
-        time.value + ((t - last) * props.score.bpm * 960) / 60000,
+        time.value + ((t - last) * props.score.bpm * PPQ) / 60000,
       );
     if (time.value >= props.score.durationTicks) playing.value = false;
   }
@@ -135,7 +136,7 @@ for (const k of keys) {
 const outsideKeyboard = computed(() =>
   props.score.notes.some((n) => n.pitch < 21 || n.pitch > 108),
 );
-const ahead = computed(() => (props.score.bpm * 960 * 4) / 60);
+const ahead = computed(() => (props.score.bpm * PPQ * 4) / 60);
 const visibleNotes = computed(() =>
   timeline.value
     .visibleNotes(time.value, ahead.value)

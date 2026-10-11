@@ -1,6 +1,6 @@
 import { crc32, uuidBytes } from '../src/lib/pseq';
 import { parseScore, type Score, type Note, type Page, type Measure, type Control, type Anchor } from '../src/lib/psc2';
-import { RECORD_BYTES, PPQ } from '../src/lib/protocol';
+import { BLOCK_BYTES, RECORD_BYTES, PPQ, SECTION } from '../src/lib/protocol';
 
 export type ScoreSource = {
   id: string; revision: number; durationTicks: number; bpm: number; capabilities: number;
@@ -24,35 +24,37 @@ export function encodeScore(s: ScoreSource): Uint8Array {
   const add = (type: number, count: number, write: (v: DataView, b: Uint8Array) => void, length = count * RECORD_BYTES[type]!) => {
     if (!count) return;
     const data = new Uint8Array(length), view = new DataView(data.buffer);
-    write(view, data); segments.push({ type, profile: [5, 6, 7].includes(type) ? 1 : 0, count, data, offset: 0 });
+    const visual = type === SECTION.PAGE || type === SECTION.BITMAP || type === SECTION.ANCHOR;
+    write(view, data); segments.push({ type, profile: visual ? 1 : 0, count, data, offset: 0 });
   };
   const meta = new TextEncoder().encode(JSON.stringify(s.meta));
-  add(1, 1, (_v, b) => b.set(meta), meta.length);
-  add(2, s.notes.length, (v, b) => s.notes.forEach((n, i) => {
-    const o = i * 16; v.setUint32(o, n.startTick, true); v.setUint32(o + 4, n.durationTicks, true);
+  add(SECTION.META, 1, (_v, b) => b.set(meta), meta.length);
+  add(SECTION.NOTE, s.notes.length, (v, b) => s.notes.forEach((n, i) => {
+    const o = i * RECORD_BYTES[SECTION.NOTE]!; v.setUint32(o, n.startTick, true); v.setUint32(o + 4, n.durationTicks, true);
     b.set([n.pitch, n.dynamic, n.part, n.flags], o + 8); v.setUint32(o + 12, n.group, true);
   }));
-  add(3, s.controls.length, (v, b) => s.controls.forEach((c, i) => {
-    v.setUint32(i * 8, c.tick, true); b.set([0, c.controller, c.value, c.flags], i * 8 + 4);
+  add(SECTION.CC, s.controls.length, (v, b) => s.controls.forEach((c, i) => {
+    const o = i * RECORD_BYTES[SECTION.CC]!;
+    v.setUint32(o, c.tick, true); b.set([0, c.controller, c.value, c.flags], o + 4);
   }));
-  add(4, s.measures.length, (v, b) => s.measures.forEach((m, i) => {
-    const o = i * 16; v.setUint32(o, m.startTick, true); v.setUint32(o + 4, m.endTick, true); v.setUint32(o + 8, m.index, true);
+  add(SECTION.MEASURE, s.measures.length, (v, b) => s.measures.forEach((m, i) => {
+    const o = i * RECORD_BYTES[SECTION.MEASURE]!; v.setUint32(o, m.startTick, true); v.setUint32(o + 4, m.endTick, true); v.setUint32(o + 8, m.index, true);
     b.set([m.numerator, m.denominatorPow], o + 12);
   }));
-  add(5, s.pages.length, () => {});
-  if (s.pages.length) add(6, 1, (_v, b) => { let o = 0; for (const p of s.pages) { b.set(p.pixels, o); o += p.pixels.length; } }, s.pages.reduce((sum, p) => sum + p.pixels.length, 0));
-  add(7, s.anchors.length, (v, b) => s.anchors.forEach((a, i) => {
-    const o = i * 24; v.setUint32(o, a.startTick, true); v.setUint32(o + 4, a.pageId, true); v.setUint32(o + 8, a.measureIndex, true);
+  add(SECTION.PAGE, s.pages.length, () => {});
+  if (s.pages.length) add(SECTION.BITMAP, 1, (_v, b) => { let o = 0; for (const p of s.pages) { b.set(p.pixels, o); o += p.pixels.length; } }, s.pages.reduce((sum, p) => sum + p.pixels.length, 0));
+  add(SECTION.ANCHOR, s.anchors.length, (v, b) => s.anchors.forEach((a, i) => {
+    const o = i * RECORD_BYTES[SECTION.ANCHOR]!; v.setUint32(o, a.startTick, true); v.setUint32(o + 4, a.pageId, true); v.setUint32(o + 8, a.measureIndex, true);
     [a.x, a.y, a.width, a.height].forEach((n, j) => v.setUint16(o + 12 + j * 2, n, true)); b[o + 20] = a.notation;
   }));
-  add(8, s.safeStarts.length, v => s.safeStarts.forEach((t, i) => v.setUint32(i * 4, t, true)));
+  add(SECTION.SAFE_START, s.safeStarts.length, v => s.safeStarts.forEach((t, i) => v.setUint32(i * RECORD_BYTES[SECTION.SAFE_START]!, t, true)));
   let length = 64 + segments.length * 32;
   for (const section of segments) { section.offset = length; length = align(length + section.data.length); }
-  const pageSegment = segments.find(d => d.type === 5), bitmap = segments.find(d => d.type === 6);
+  const pageSegment = segments.find(d => d.type === SECTION.PAGE), bitmap = segments.find(d => d.type === SECTION.BITMAP);
   if (pageSegment && bitmap) {
     const v = new DataView(pageSegment.data.buffer); let pixelOffset = bitmap.offset;
     s.pages.forEach((p, i) => {
-      const o = i * 24; v.setUint32(o, p.id, true); v.setUint16(o + 4, p.profile, true);
+      const o = i * RECORD_BYTES[SECTION.PAGE]!; v.setUint32(o, p.id, true); v.setUint16(o + 4, p.profile, true);
       pageSegment.data.set([p.notation, 1], o + 6);
       [p.width, p.height, p.stride].forEach((n, j) => v.setUint16(o + 8 + 2 * j, n, true));
       v.setUint32(o + 16, pixelOffset, true); v.setUint32(o + 20, p.pixels.length, true); pixelOffset += p.pixels.length;
@@ -73,5 +75,5 @@ export function encodeScore(s: ScoreSource): Uint8Array {
 }
 
 export function scoreSummary(s: Score) {
-  return { id: s.id, total_bytes: s.bytes.length, file_crc: s.crc, total_blocks: Math.ceil(s.bytes.length / 512), tail_bytes: s.bytes.length % 512 || 512, duration_ticks: s.durationTicks, bpm: s.bpm, notes: s.notes.length, safe_starts: s.safeStarts, anchors: s.anchors };
+  return { id: s.id, total_bytes: s.bytes.length, file_crc: s.crc, total_blocks: Math.ceil(s.bytes.length / BLOCK_BYTES), tail_bytes: s.bytes.length % BLOCK_BYTES || BLOCK_BYTES, duration_ticks: s.durationTicks, bpm: s.bpm, notes: s.notes.length, safe_starts: s.safeStarts, anchors: s.anchors };
 }

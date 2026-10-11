@@ -27,7 +27,6 @@ export class BleLink implements DeviceLink {
   name = "蓝牙设备";
   onDisconnect?: () => void;
   onChanged?: (event: Changed) => void;
-  mode?: number;
   closed = false;
   private queue: Promise<unknown> = Promise.resolve();
   private device?: BluetoothDevice;
@@ -75,7 +74,6 @@ export class BleLink implements DeviceLink {
       if (f.type === CMD.CHANGED && f.session === 0 && f.seq === 0) {
         try {
           const changed = validateChanged(readJson<Changed>(f.payload));
-          this.mode = changed.mode;
           this.onChanged?.(changed);
         } catch {
           /* Unsolicited malformed notifications never resolve a request. */
@@ -153,7 +151,7 @@ export class BleLink implements DeviceLink {
     });
     stopped.catch(() => {});
     try {
-      for (let attempt = 0; attempt < 3; attempt++) {
+      for (let attempt = 0; ; attempt++) {
         let timer: ReturnType<typeof setTimeout> | undefined;
         const answer = new Promise<Frame>((resolve, reject) => {
           this.pending = { seq, type, resolve, reject };
@@ -215,7 +213,6 @@ export class BleLink implements DeviceLink {
             );
             throw new DeviceError(r.code, r.next_block, r.message);
           }
-          if (f.type !== CMD.ACK) throw Error("未知设备响应");
           return readJson<T>(f.payload);
         } catch (e) {
           this.decoder.reset();
@@ -230,7 +227,6 @@ export class BleLink implements DeviceLink {
           this.pending = undefined;
         }
       }
-      throw Error("设备响应超时");
     } finally {
       this.interrupt = undefined;
     }

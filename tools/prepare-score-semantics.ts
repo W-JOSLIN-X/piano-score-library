@@ -1,27 +1,27 @@
 import { readFileSync } from 'node:fs';
 import { computeSafeStarts } from '../src/lib/psc2';
+import { DYNAMICS, PPQ } from '../src/lib/protocol';
 import type { ScoreSource } from './encode-score';
 
 type Event = {kind:string;part:number;tick:number;duration?:number;pitch?:number;values?:string[]};
 export type AuditedSource = {piece:string;source_sha256:string;recipe:{title:string;numerator:number;bpm:number;bars:number;route:number[]};events:Event[]};
 export function prepareSemantics(number:string):ScoreSource {
   const data:AuditedSource=JSON.parse(readFileSync(`sources/mutopia/25EF-${number}.events.json`,'utf8'));
-  const length=data.recipe.numerator*960;
+  const length=data.recipe.numerator*PPQ;
   type Written = Omit<ScoreSource['notes'][number], 'group'> & {tie:boolean};
   const written:Written[]=[];
-  const dynamics=['','pp','p','mp','mf','f','ff'];
   for(const part of [1,2]) {
     const moments=new Map<number,Event[]>();
     for(const e of data.events.filter(e=>e.part===part))moments.set(e.tick,[...(moments.get(e.tick)??[]),e]);
     let dynamic=0;
     for(const [tick,events] of [...moments].sort(([a],[b])=>a-b)) {
       for(const e of events) {
-        if(e.kind==='dynamic')dynamic=Math.max(0,dynamics.indexOf(e.values![0]!));
+        if(e.kind==='dynamic')dynamic=Math.max(0,DYNAMICS.findIndex(level=>level===e.values![0]));
         if(['crescendo','decrescendo'].includes(e.kind)&&e.values![0]==='-1')dynamic=0;
         if(e.kind==='text') {
           const text=e.values![0]!;
           if(/cresc|dim\./i.test(text))dynamic=0;
-          const prefix=/^(pp|p|mp|mf|ff|f)\s/.exec(text);if(prefix)dynamic=dynamics.indexOf(prefix[1]!);
+          const prefix=/^(pp|p|mp|mf|ff|f)\s/.exec(text);if(prefix)dynamic=DYNAMICS.findIndex(level=>level===prefix[1]);
         }
       }
       const articulations=events.filter(e=>e.kind==='articulation').map(e=>e.values![0]);

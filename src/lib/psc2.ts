@@ -1,5 +1,5 @@
 import { crc32, uuid } from "./binary";
-import { PPQ, RECORD_BYTES, validTitle } from "./protocol";
+import { DYNAMICS, PPQ, RECORD_BYTES, SECTION, validTitle } from "./protocol";
 
 export type Note = {
   id: number;
@@ -179,7 +179,11 @@ export function parseScore(input: Uint8Array): Score {
         flags === 1 && size === RECORD_BYTES[type],
         "已知段标志或记录长度错误",
       );
-      check(profile === ([5, 6, 7].includes(type) ? 1 : 0), "不支持的 profile");
+      const visual =
+        type === SECTION.PAGE ||
+        type === SECTION.BITMAP ||
+        type === SECTION.ANCHOR;
+      check(profile === (visual ? 1 : 0), "不支持的 profile");
       check(size ? n * size === length : n === 1, "记录数量错误");
     }
     check(
@@ -211,7 +215,7 @@ export function parseScore(input: Uint8Array): Score {
     const s = get(type);
     if (s) for (let i = 0; i < s.count; i++) fn(s.start + i * s.size, i);
   };
-  const metaSection = get(1);
+  const metaSection = get(SECTION.META);
   check(
     metaSection && metaSection.end - metaSection.start <= 65536,
     "缺少或过大的 META",
@@ -238,13 +242,14 @@ export function parseScore(input: Uint8Array): Score {
     "元数据缺少 source 或 generator_version",
   );
   check(
-    !(caps & 1) || (get(2) && get(4) && get(8)),
+    !(caps & 1) ||
+      (get(SECTION.NOTE) && get(SECTION.MEASURE) && get(SECTION.SAFE_START)),
     "练习缺少 NOTE、MEASURE 或 SAFE_START",
   );
   const notes: Note[] = [],
     groups = new Map<number, number>(),
     pitchEnds = new Map<number, number>();
-  each(2, (o, id) => {
+  each(SECTION.NOTE, (o, id) => {
     const start = u32(o),
       length = u32(o + 4),
       pitch = bytes[o + 8]!,
@@ -256,7 +261,7 @@ export function parseScore(input: Uint8Array): Score {
       length > 0 &&
         start + length <= duration &&
         pitch <= 127 &&
-        dynamic <= 6 &&
+        dynamic < DYNAMICS.length &&
         part >= 1 &&
         part <= 3 &&
         !(flags & ~7),
@@ -301,7 +306,7 @@ export function parseScore(input: Uint8Array): Score {
   const controls: Control[] = [],
     ccKeys = new Set<string>();
   let pedalDown: Control | undefined;
-  each(3, (o) => {
+  each(SECTION.CC, (o) => {
     const tick = u32(o),
       controller = bytes[o + 5]!,
       value = bytes[o + 6]!,
@@ -332,7 +337,7 @@ export function parseScore(input: Uint8Array): Score {
   });
   check(!pedalDown?.flags, "评分踏板缺少结束松开");
   const measures: Measure[] = [];
-  each(4, (o, index) => {
+  each(SECTION.MEASURE, (o, index) => {
     const start = u32(o),
       stop = u32(o + 4),
       numerator = bytes[o + 12]!,
@@ -362,11 +367,14 @@ export function parseScore(input: Uint8Array): Score {
       denominatorPow,
     });
   });
-  check(!get(4) || measures.at(-1)?.endTick === duration, "小节未连续覆盖曲目");
+  check(
+    !get(SECTION.MEASURE) || measures.at(-1)?.endTick === duration,
+    "小节未连续覆盖曲目",
+  );
   const pages: Page[] = [],
     pageMap = new Map<number, Page>(),
-    bitmap = get(6);
-  each(5, (o) => {
+    bitmap = get(SECTION.BITMAP);
+  each(SECTION.PAGE, (o) => {
     const id = u32(o),
       profile = u16(o + 4),
       notation = bytes[o + 6]!,
@@ -407,7 +415,7 @@ export function parseScore(input: Uint8Array): Score {
   check(!(caps & 2) || pages.some((p) => p.notation === 1), "缺少五线谱资源");
   check(!(caps & 4) || pages.some((p) => p.notation === 2), "缺少简谱资源");
   const anchors: Anchor[] = [];
-  each(7, (o) => {
+  each(SECTION.ANCHOR, (o) => {
     const startTick = u32(o),
       pageId = u32(o + 4),
       measureIndex = u32(o + 8),
@@ -458,8 +466,8 @@ export function parseScore(input: Uint8Array): Score {
     if (list.length && caps & 1) notationPractice.push(notation);
   }
   const safeStarts: number[] = [];
-  each(8, (o) => safeStarts.push(u32(o)));
-  if (get(8)) {
+  each(SECTION.SAFE_START, (o) => safeStarts.push(u32(o)));
+  if (get(SECTION.SAFE_START)) {
     const expected = computeSafeStarts(notes, measures, controls, duration);
     check(
       safeStarts.length === expected.length &&

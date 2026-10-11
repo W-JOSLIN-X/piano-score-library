@@ -61,7 +61,7 @@ export class FrameDecoder {
       if (b.length < 16) break;
       const v = new DataView(b.buffer, b.byteOffset, b.byteLength),
         n = v.getUint16(12, true);
-      if (b[2] !== VERSION || n > 1024 || v.getUint16(14, true) !== 0) {
+      if (b[2] !== VERSION || n > MAX_PAYLOAD || v.getUint16(14, true) !== 0) {
         this.data = b.slice(1);
         continue;
       }
