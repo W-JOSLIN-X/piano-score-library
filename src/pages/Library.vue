@@ -8,27 +8,20 @@ import {
   type Score,
 } from "../lib/pseq";
 import { useDevice } from "../composables/useDevice";
+import { useLibrary, type CatalogItem } from "../composables/useLibrary";
 import ScorePreview from "../components/ScorePreview.vue";
-type Item = {
-  id: string;
-  title: string;
-  subtitle: string;
-  level: string;
-  tempo: number;
-  duration: number;
-  notes: number;
-  bytes: number;
-  crc: number;
-  file: string;
-  cover: string;
-  capabilities: number;
-  revision: number;
-};
-const items = ref<Item[]>([]),
-  query = ref(""),
+const {
+  imported,
+  rememberImported,
+  clearImported,
+  items,
+  catalogState,
+  catalogError,
+  loadCatalog,
+} = useLibrary();
+const query = ref(""),
   mode = ref("全部格式"),
   level = ref("全部难度"),
-  loading = ref(true),
   error = ref(""),
   opening = ref(""),
   modal = ref(false),
@@ -51,18 +44,8 @@ const filtered = computed(() =>
 );
 const base = import.meta.env.BASE_URL;
 let selection = 0;
-onMounted(async () => {
-  try {
-    const r = await fetch(base + "scores/catalog.json");
-    if (!r.ok) throw Error("曲库加载失败，请稍后刷新");
-    items.value = await r.json();
-  } catch (e) {
-    error.value = String(e);
-  } finally {
-    loading.value = false;
-  }
-});
-async function openItem(item: Item) {
+onMounted(loadCatalog);
+async function openItem(item: CatalogItem) {
   const request = ++selection;
   opening.value = item.id;
   error.value = "";
@@ -99,6 +82,7 @@ async function importFile(event: Event) {
     if (file.size > MAX_FILE_BYTES) throw Error("文件超过 32 MiB 上限");
     const score = parseScore(new Uint8Array(await file.arrayBuffer()));
     if (request !== selection) return;
+    rememberImported(score);
     selected.value = score;
     modal.value = true;
   } catch (e) {
@@ -106,6 +90,21 @@ async function importFile(event: Event) {
   } finally {
     el.value = "";
   }
+}
+function openImported() {
+  if (!imported.value) return;
+  selection++;
+  opening.value = "";
+  error.value = "";
+  selected.value = imported.value;
+  modal.value = true;
+}
+function removeImported() {
+  if (selected.value === imported.value) {
+    selected.value = undefined;
+    modal.value = false;
+  }
+  clearImported();
 }
 function saveFile() {
   if (!selected.value) return;
@@ -137,6 +136,27 @@ function saveFile() {
       @change="importFile"
     />
   </div>
+  <UCard v-if="imported" class="mb-5">
+    <div class="flex flex-wrap items-center justify-between gap-3">
+      <div class="min-w-0">
+        <p class="font-medium break-words">
+          已导入：{{ imported.meta.title }}
+        </p>
+        <p class="text-sm text-muted">
+          {{ formatBytes(imported.bytes.length) }} ·
+          本次打开网页期间保留一首，刷新后清空
+        </p>
+      </div>
+      <div class="flex flex-wrap gap-2">
+        <UButton variant="soft" @click="openImported"
+          >打开已导入曲目</UButton
+        >
+        <UButton variant="ghost" color="neutral" @click="removeImported"
+          >移除已导入项</UButton
+        >
+      </div>
+    </div>
+  </UCard>
   <div class="filter-bar">
     <UInput
       v-model="query"
@@ -158,11 +178,34 @@ function saveFile() {
     />
   </div>
   <div class="collection-meta">
-    <span>{{ filtered.length }} 首曲目</span
+    <span>{{
+      catalogState === "ready"
+        ? `${filtered.length} 首曲目`
+        : catalogState === "loading"
+          ? "曲库加载中"
+          : "曲库暂不可用"
+    }}</span
     ><span>公开版权完整作品 · PSC2</span>
   </div>
   <UAlert v-if="error" color="error" :title="error" class="mb-5" />
-  <div v-if="loading" class="empty-state">正在打开曲库…</div>
+  <div v-if="catalogState === 'loading'" class="empty-state">
+    正在打开曲库…
+  </div>
+  <div
+    v-else-if="catalogState === 'error'"
+    class="empty-state"
+    role="alert"
+  >
+    <UIcon name="i-lucide-circle-alert" class="size-10" />
+    <h3>曲库加载失败</h3>
+    <p>{{ catalogError }}</p>
+    <UButton variant="soft" @click="loadCatalog">重新加载</UButton>
+  </div>
+  <div v-else-if="!items.length" class="empty-state">
+    <UIcon name="i-lucide-library" class="size-10" />
+    <h3>曲库暂时没有曲目</h3>
+    <UButton variant="soft" @click="loadCatalog">重新加载</UButton>
+  </div>
   <div v-else-if="!filtered.length" class="empty-state">
     <UIcon name="i-lucide-search" class="size-10" />
     <h3>暂时没有匹配的曲目</h3>
