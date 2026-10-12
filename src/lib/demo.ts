@@ -305,6 +305,7 @@ export class DemoLink implements DeviceLink {
         )
           throw new DeviceError(ERR.CONTENT_MISMATCH);
         if (r.entry.entry_state === 1) {
+          if (s.activeId !== p.id) throw new DeviceError(ERR.BUSY);
           if (
             r.entry.next_block !== r.entry.total_blocks ||
             crc32(r.bytes) !== r.entry.file_crc
