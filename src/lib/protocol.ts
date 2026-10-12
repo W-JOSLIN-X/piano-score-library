@@ -26,6 +26,6 @@ export const RECORD_BYTES: Record<number, number> = {
 export const DYNAMICS = ["未指定", "pp", "p", "mp", "mf", "f", "ff"] as const;
 export const MODE_NAMES = ["曲库管理", "自由演奏", "曲谱阅读", "跟谱练习"] as const;
 export const isU32 = (x: unknown): x is number => typeof x === "number" && Number.isInteger(x) && x >= 0 && x <= 0xffffffff;
-export const isId = (x: unknown): x is string => typeof x === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(x);
+export const isId = (x: unknown): x is string => typeof x === "string" && x !== "00000000-0000-0000-0000-000000000000" && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(x);
 export const validTitle = (x: unknown): x is string => typeof x === "string" && x.length > 0 &&
   [...x].length <= 128 && new TextEncoder().encode(x).length <= 384 && !/[\u0000-\u001f\ud800-\udfff]/u.test(x);

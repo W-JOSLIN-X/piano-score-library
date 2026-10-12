@@ -1,3 +1,5 @@
+import { isId } from "./protocol";
+
 export function crc32(bytes: Uint8Array): number {
   let crc = 0xffffffff;
   for (const b of bytes) {
@@ -11,9 +13,7 @@ export function uuid(bytes: Uint8Array): string {
   return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20)}`;
 }
 export function uuidBytes(id: string): Uint8Array {
-  if (
-    !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)
-  )
+  if (!isId(id.toLowerCase()))
     throw Error("曲目 ID 格式错误");
   return Uint8Array.from(id.replaceAll("-", "").match(/../g)!, (h) =>
     parseInt(h, 16),

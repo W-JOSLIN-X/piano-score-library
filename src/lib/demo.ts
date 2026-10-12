@@ -251,8 +251,9 @@ export class DemoLink implements DeviceLink {
         requireManagement();
         if (payload.length < 21 || payload.length > 20 + BLOCK_BYTES)
           throw new DeviceError(ERR.BAD_REQUEST);
-        const id = uuid(payload.subarray(0, 16)),
-          index = new DataView(
+        const id = uuid(payload.subarray(0, 16));
+        if (!isId(id)) throw new DeviceError(ERR.BAD_REQUEST);
+        const index = new DataView(
             payload.buffer,
             payload.byteOffset,
             payload.byteLength,

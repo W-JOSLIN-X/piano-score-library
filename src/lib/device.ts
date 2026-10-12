@@ -1,5 +1,5 @@
 import { parseScore, uuidBytes, type Score } from "./pseq";
-import { BLOCK_BYTES, CMD, ERR } from "./protocol";
+import { BLOCK_BYTES, CMD, ERR, isId } from "./protocol";
 import { jsonBytes } from "./wire";
 import {
   ensure,
@@ -219,6 +219,7 @@ export async function deleteEntry(
   link: DeviceLink,
   entry: Entry,
 ): Promise<void> {
+  if (!isId(entry.id)) throw Error("非法曲目身份");
   const status = validateStatus(await link.request(CMD.STATUS));
   if (status.mode !== 0)
     throw new DeviceError(ERR.BUSY, null, "设备不在曲库管理状态");

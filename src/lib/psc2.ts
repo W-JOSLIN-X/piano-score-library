@@ -1,5 +1,5 @@
 import { crc32, uuid } from "./binary";
-import { DYNAMICS, PPQ, RECORD_BYTES, SECTION, validTitle } from "./protocol";
+import { DYNAMICS, PPQ, RECORD_BYTES, SECTION, isId, validTitle } from "./protocol";
 
 export type Note = {
   id: number;
@@ -129,6 +129,8 @@ export function parseScore(input: Uint8Array): Score {
     u16(52) === PPQ && u16(54) >= 20 && u16(54) <= 300 && zero(56, 64),
     "PPQ、默认 BPM 或保留字段错误",
   );
+  const id = uuid(bytes.subarray(12, 28));
+  check(isId(id), "非法曲目身份：UUID 不能为全零");
   const count = u16(36),
     duration = u32(32),
     caps = u32(44);
@@ -476,7 +478,7 @@ export function parseScore(input: Uint8Array): Score {
     );
   }
   return {
-    id: uuid(bytes.subarray(12, 28)),
+    id,
     revision: u32(28),
     durationTicks: duration,
     bpm: u16(54),

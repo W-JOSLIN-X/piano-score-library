@@ -132,12 +132,13 @@ describe("visible directory and transfer state", () => {
       file_crc: old.crc,
     });
   });
-  it("rejects a corrupted replacement before deleting the complete old package", async () => {
+  it.each(["magic", "nil UUID"])("rejects a replacement with invalid %s before deleting the complete old package", async (kind) => {
     const replacement = score(),
       old = smallScore(replacement.id, "保留的旧曲目");
     await finish(d.upload(old));
     replacement.bytes = replacement.bytes.slice();
-    replacement.bytes[0] = 0;
+    if (kind === "magic") replacement.bytes[0] = 0;
+    else replacement.bytes.fill(0, 12, 28);
     const link = d.link.value!,
       original = link.request.bind(link),
       calls: number[] = [];
@@ -147,6 +148,7 @@ describe("visible directory and transfer state", () => {
     };
     await finish(d.upload(replacement, true));
     expect(d.error.value).not.toBe("");
+    if (kind === "nil UUID") expect(d.error.value).toContain("非法曲目身份");
     expect(d.stage.value).toBe("下载未开始");
     expect(calls).not.toContain(CMD.DELETE);
     expect(calls).not.toContain(CMD.BEGIN);
@@ -158,6 +160,18 @@ describe("visible directory and transfer state", () => {
       total_bytes: old.bytes.length,
       file_crc: old.crc,
     });
+  });
+  it("rejects a new nil-header upload before BEGIN", async () => {
+    const uploaded = score(), calls: number[] = [];
+    uploaded.bytes.fill(0, 12, 28);
+    const link = d.link.value!, request = link.request.bind(link);
+    link.request = async (type, payload) => { calls.push(type); return request(type, payload) as never; };
+    await finish(d.upload(uploaded));
+    expect(d.error.value).toContain("非法曲目身份");
+    expect(d.stage.value).toBe("下载未开始");
+    expect(calls).not.toContain(CMD.BEGIN);
+    expect(calls).not.toContain(CMD.DELETE);
+    expect(d.entries.value).toEqual([]);
   });
   it("shows a new upload rejected by local capability checks as not started", async () => {
     const uploaded = score(),
